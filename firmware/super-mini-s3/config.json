@@ -1,0 +1,17 @@
+{
+  "speed": {
+    "meters_per_pulse": 0.1,
+    "debounce_us": 2000,
+    "max_speed_kmh": 80.0
+  },
+  "battery": {
+    "tap_divider_ratio": [5.3, 9.7, 15.3, 19.7],
+    "current_sens_v_per_a": 0.007813,
+    "voltage_factor_milli": [1000, 1000, 1000, 1000],
+    "ads_mode": "cumulative"
+  },
+  "sleep": {
+    "b4_loss_timeout_s": 600
+  },
+  "remote_config_id": 0
+}

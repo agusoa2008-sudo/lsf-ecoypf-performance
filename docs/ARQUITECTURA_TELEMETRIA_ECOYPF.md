@@ -1,6 +1,7 @@
-# Sistema de Telemetría e Instrumentación — Desafío Eco YPF 2026
+# LSF EcoYPF — Performance
 
-**Proyecto:** uPy Proto 1 — Super Mini S3 (sensado y métricas) + Heltec Vision Master T190 (display/gateway/piloto) + Paddock S3 (receptor LoRa)
+**Equipo:** La Salle Florida (LSF)
+**Proyecto:** Instrumentación de a bordo para maximizar el performance del auto — Super Mini S3 (sensado y métricas) + Heltec Vision Master T190 (display/gateway/piloto) + Paddock S3 (receptor LoRa)
 **Categoría:** Desafío Eco YPF — Campeonato Argentino (Noviembre 2026), reglamento CDA/ACA–FIA
 **Fecha del documento:** 2026-10-20
 **Propósito:** Documento base (uso interno) de la arquitectura y del protocolo implementado.
@@ -23,6 +24,38 @@
   todavía no se integra al flujo de telemetría ni calcula tiempos de vuelta.
 - Requisitos aún pendientes del T190: alimentación independiente (batería propia) y modos deep
   sleep/wake por botón.
+
+---
+
+## 0. Objetivo: performance, no telemetría por sí misma
+
+Este no es un proyecto de "telemetría" en abstracto: es la instrumentación de a bordo que el equipo
+**LSF** usa para maximizar el **performance** del auto en el Desafío Eco YPF. En una categoría de
+eficiencia energética, performance no significa "más veloz" — significa recorrer la mayor distancia
+posible con la menor energía posible, dentro del tiempo de carrera. Cada sensor, cada cálculo y cada
+pantalla de este sistema existen en función de ese único objetivo.
+
+**La métrica que define el performance:** `Wh/km` — energía consumida por kilómetro recorrido
+(campos `WI` instantáneo y `WA` promedio, ver §4.3 y §7). Cuanto más bajo, mejor: significa que el
+auto convierte más energía de batería en distancia recorrida. Bajar el Wh/km manteniendo un ritmo de
+carrera competitivo es, literalmente, el objetivo de la categoría.
+
+**Por qué se mide cada cosa — todo apunta al mismo número:**
+
+| Qué medimos | Por qué, en función del performance |
+|---|---|
+| Tensión de las 4 baterías (B1–B4, VBATS) | Es el factor `V` de `P = V × I`. Sin potencia instantánea no hay energía consumida (Wh) y sin Wh no hay Wh/km. Medir banco por banco — no solo el total — permite detectar un banco rindiendo peor que los demás, antes de que arruine el promedio general. |
+| Corriente de batería (ADS1220 + toroide) | Es el factor `I` de la potencia, y la variable que más responde al estilo de manejo (acelerar vs. dejar rodar). Es lo que el piloto puede controlar en tiempo real para bajar el Wh/km. |
+| Pulsos de velocidad → velocidad y distancia | Es el denominador de Wh/km: sin distancia recorrida, la energía gastada no significa nada. También da la velocidad instantánea para aplicar la técnica de "impulso y deslizamiento" (acelerar y dejar rodar en punto muerto) característica de las categorías de eficiencia. |
+| Potencia instantánea y promedio (`P`, `PA`) | Traduce `V × I` a algo que el piloto puede leer y corregir en el momento: si la potencia sube sin que suba la velocidad, está gastando más de lo necesario. |
+| Energía acumulada (`WT`) y Wh/km instantáneo/promedio (`WI`, `WA`) | Es el resultado final: el número que el piloto y el equipo técnico usan para decidir, vuelta a vuelta, si el estilo de manejo está mejorando o empeorando el performance. |
+| GPS / tiempo de vuelta (⏳ pendiente de integrar, ver §5.3) | Permite cruzar Wh/km con el ritmo de cada vuelta: la estrategia ideal no es gastar lo mínimo posible (eso sería no moverse), sino encontrar el manejo que minimiza Wh/km sin caer del ritmo mínimo competitivo. |
+| Registro en microSD (CSV, T190, ver §5.4 en `FUNCIONALIDADES.md`) | Permite analizar después de cada sesión qué tramos de pista o qué maniobras gastaron más energía, para ajustar la estrategia de manejo en la próxima tanda. |
+| Dashboard en el paddock (Paddock S3) | El reglamento prohíbe toda conexión eléctrica entre el auto y boxes (art. 9.4); el enlace LoRa inalámbrico es la única forma de que el equipo técnico vea el performance en vivo y pueda indicarle al piloto, por los canales de comunicación autorizados (art. 13), si debe ajustar el ritmo para cuidar energía. |
+
+En otras palabras: este sistema existe para que el piloto y el equipo técnico vean, en tiempo real, si
+el auto está rindiendo lo que tiene que rendir — y puedan ajustar durante la carrera, no reconstruir
+después de que terminó qué pasó.
 
 ---
 

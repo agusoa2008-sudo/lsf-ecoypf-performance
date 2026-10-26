@@ -1,7 +1,13 @@
-# EcoYPF 2026 — Funcionalidades actuales por nodo
+# LSF EcoYPF — Funcionalidades actuales por nodo
 
 > Estado al 2026-10-24. Marca ✅ = implementado y activo; ⚠️ = implementado
 > pero sin validación física completa; ⏳ = diseñado, pendiente de código.
+
+Este documento lista **qué** está implementado en cada nodo. El **por qué** —
+cómo cada sensor y cada cálculo sirve al objetivo de performance (bajar el
+Wh/km) — está desarrollado en
+[`ARQUITECTURA_TELEMETRIA_ECOYPF.md §0`](ARQUITECTURA_TELEMETRIA_ECOYPF.md#0-objetivo-performance-no-telemetría-por-sí-misma).
+Acá se agrega, por sensor, para qué sirve puntualmente ese dato.
 
 ---
 
@@ -15,12 +21,12 @@ Super Mini ya calculó.
 
 ### Sensores
 
-| Sensor | Interfaz | GPIO | Qué mide |
-|---|---|---|---|
-| ADS1115 | I2C (SCL=12, SDA=13) | GPIO12/13 | 4 taps acumulativos del pack → B1..B4 individuales y VBATS total |
-| ADS1220 + toroidal Hall "LSF" | SPI1 (SCK=4, MOSI=1, MISO=2, CS=3) | — | Corriente de batería (no invasivo) |
-| Sensor de pulsos de velocidad | IRQ GPIO10, pull-up | GPIO10 | Pulsos de rueda → velocidad instantánea y distancia acumulada |
-| Presencia de B4 (divisor del auto, 48V) | GPIO digital, pull-down | GPIO11 | Alto = auto encendido/B4 presente, bajo = B4 ausente → dispara deep sleep |
+| Sensor | Interfaz | GPIO | Qué mide | Para qué sirve (performance) |
+|---|---|---|---|---|
+| ADS1115 | I2C (SCL=12, SDA=13) | GPIO12/13 | 4 taps acumulativos del pack → B1..B4 individuales y VBATS total | `VBATS` es el factor `V` de la potencia (`P=V×I`); B1–B4 por separado detectan un banco rindiendo peor que el resto antes de que arruine el Wh/km promedio |
+| ADS1220 + toroidal Hall "LSF" | SPI1 (SCK=4, MOSI=1, MISO=2, CS=3) | — | Corriente de batería (no invasivo) | Factor `I` de la potencia; la variable que más responde al estilo de manejo del piloto |
+| Sensor de pulsos de velocidad | IRQ GPIO10, pull-up | GPIO10 | Pulsos de rueda → velocidad instantánea y distancia acumulada | Denominador de Wh/km (sin distancia, la energía gastada no dice nada) y velocidad para pacing en pista |
+| Presencia de B4 (divisor del auto, 48V) | GPIO digital, pull-down | GPIO11 | Alto = auto encendido/B4 presente, bajo = B4 ausente → dispara deep sleep | No aporta al cálculo de performance; cuida la autonomía de la batería propia del instrumento entre sesiones |
 
 **Modo de medición ADS1115 — acumulativo (único modo actual):**
 Los 4 canales del ADS1115 miden taps respecto a masa:
@@ -32,6 +38,9 @@ Cada tap tiene su propio divisor resistivo; los ratios viven en
 
 ### Cálculos (fuente de verdad)
 
+`WI` y `WA` son el resultado final — el número de performance que le importa al equipo. Todo lo
+demás en esta tabla es un paso intermedio para llegar a esos dos valores.
+
 | Magnitud | Cómo | Estado |
 |---|---|---|
 | Tensiones B1–B4 y VBATS | ADS1115, ratio de divisor + factor grueso por banco | ✅ |
@@ -41,8 +50,8 @@ Cada tap tiene su propio divisor resistivo; los ratios viven en
 | Velocidad `V` | Período entre pulsos; cero si último pulso > 2 s | ✅ |
 | Distancia `D` | Suma de `delta_pulsos × metros_por_pulso` | ✅ |
 | Energía `WT` | Integral de `P × dt` en Wh | ✅ |
-| Eficiencia instantánea `WI` | `P / V` (solo si `V > 0.5 km/h`) | ✅ |
-| Eficiencia promedio `WA` | `WT / (D/1000)` | ✅ |
+| **Eficiencia instantánea `WI`** (Wh/km, lo que el piloto corrige en vivo) | `P / V` (solo si `V > 0.5 km/h`) | ✅ |
+| **Eficiencia promedio `WA`** (Wh/km, el número que define el resultado de la tanda) | `WT / (D/1000)` | ✅ |
 
 ### Validez de sensores y recuperación
 

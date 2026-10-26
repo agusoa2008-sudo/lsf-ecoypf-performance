@@ -4,10 +4,14 @@
 > pero sin validación física completa; ⏳ = diseñado, pendiente de código.
 
 Este documento lista **qué** está implementado en cada nodo. El **por qué** —
-cómo cada sensor y cada cálculo sirve al objetivo de performance (bajar el
-Wh/km) — está desarrollado en
-[`ARQUITECTURA_TELEMETRIA_ECOYPF.md §0`](ARQUITECTURA_TELEMETRIA_ECOYPF.md#0-objetivo-performance-no-telemetría-por-sí-misma).
-Acá se agrega, por sensor, para qué sirve puntualmente ese dato.
+cómo cada sensor y cada cálculo sirve al dato central del proyecto, **potencia
+objetivo vs. potencia actual** (la potencia que agota la batería justo en el
+minuto 80, comparada contra la que el piloto está gastando ahora) — está
+desarrollado en
+[`ARQUITECTURA_TELEMETRIA_ECOYPF.md §0`](ARQUITECTURA_TELEMETRIA_ECOYPF.md#0-objetivo-potencia-objetivo-vs-potencia-actual-el-dato-central-del-proyecto).
+Acá se agrega, por sensor, para qué sirve puntualmente ese dato. El Wh/km
+(`WI`/`WA`) sigue calculándose, pero como dato secundario de análisis
+post-tanda, no como el número que el piloto mira en vivo para decidir.
 
 ---
 
@@ -21,12 +25,12 @@ Super Mini ya calculó.
 
 ### Sensores
 
-| Sensor | Interfaz | GPIO | Qué mide | Para qué sirve (performance) |
+| Sensor | Interfaz | GPIO | Qué mide | Para qué sirve (potencia objetivo vs. actual) |
 |---|---|---|---|---|
-| ADS1115 | I2C (SCL=12, SDA=13) | GPIO12/13 | 4 taps acumulativos del pack → B1..B4 individuales y VBATS total | `VBATS` es el factor `V` de la potencia (`P=V×I`); B1–B4 por separado detectan un banco rindiendo peor que el resto antes de que arruine el Wh/km promedio |
-| ADS1220 + toroidal Hall "LSF" | SPI1 (SCK=4, MOSI=1, MISO=2, CS=3) | — | Corriente de batería (no invasivo) | Factor `I` de la potencia; la variable que más responde al estilo de manejo del piloto |
-| Sensor de pulsos de velocidad | IRQ GPIO10, pull-up | GPIO10 | Pulsos de rueda → velocidad instantánea y distancia acumulada | Denominador de Wh/km (sin distancia, la energía gastada no dice nada) y velocidad para pacing en pista |
-| Presencia de B4 (divisor del auto, 48V) | GPIO digital, pull-down | GPIO11 | Alto = auto encendido/B4 presente, bajo = B4 ausente → dispara deep sleep | No aporta al cálculo de performance; cuida la autonomía de la batería propia del instrumento entre sesiones |
+| ADS1115 | I2C (SCL=12, SDA=13) | GPIO12/13 | 4 taps acumulativos del pack → B1..B4 individuales y VBATS total | `VBATS` es el factor `V` de la potencia actual (`P=V×I`); B1–B4 por separado detectan un banco rindiendo peor que el resto antes de que afecte la potencia disponible |
+| ADS1220 + toroidal Hall "LSF" | SPI1 (SCK=4, MOSI=1, MISO=2, CS=3) | — | Corriente de batería (no invasivo) | Factor `I` de la potencia actual; es lo que el piloto mueve con el acelerador para acercarla a la potencia objetivo |
+| Sensor de pulsos de velocidad | IRQ GPIO10, pull-up | GPIO10 | Pulsos de rueda → velocidad instantánea y distancia acumulada | No entra en el cálculo de potencia; alimenta distancia y Wh/km de análisis post-tanda (ver `ARQUITECTURA_TELEMETRIA_ECOYPF.md §0`) |
+| Presencia de B4 (divisor del auto, 48V) | GPIO digital, pull-down | GPIO11 | Alto = auto encendido/B4 presente, bajo = B4 ausente → dispara deep sleep | No aporta al cálculo de potencia objetivo; cuida la autonomía de la batería propia del instrumento entre sesiones |
 
 **Modo de medición ADS1115 — acumulativo (único modo actual):**
 Los 4 canales del ADS1115 miden taps respecto a masa:
@@ -38,20 +42,25 @@ Cada tap tiene su propio divisor resistivo; los ratios viven en
 
 ### Cálculos (fuente de verdad)
 
-`WI` y `WA` son el resultado final — el número de performance que le importa al equipo. Todo lo
-demás en esta tabla es un paso intermedio para llegar a esos dos valores.
+`PA` (potencia actual) es la mitad de la comparación en vivo que decide el ritmo del piloto. La otra
+mitad, **potencia objetivo**, todavía no está implementada — depende de la energía restante (`WT`
+contra la capacidad de la batería) y de un reloj de carrera que hoy no existe (ver
+`ARQUITECTURA_TELEMETRIA_ECOYPF.md §0` y §8). `WI`/`WA` (Wh/km) quedan como dato secundario, útil para
+análisis post-tanda, no como el número que el piloto corrige en vivo.
 
 | Magnitud | Cómo | Estado |
 |---|---|---|
 | Tensiones B1–B4 y VBATS | ADS1115, ratio de divisor + factor grueso por banco | ✅ |
 | Corriente I | ADS1220, sensibilidad Hall `current_sens_v_per_a` | ✅ |
 | Potencia instantánea `P` | `VBATS × I` | ✅ |
-| Potencia promedio 5 s `PA` | EMA con τ=5 s | ✅ |
+| **Potencia promedio 5 s `PA`** (mitad de la comparación en vivo: "potencia actual") | EMA con τ=5 s | ✅ |
 | Velocidad `V` | Período entre pulsos; cero si último pulso > 2 s | ✅ |
 | Distancia `D` | Suma de `delta_pulsos × metros_por_pulso` | ✅ |
 | Energía `WT` | Integral de `P × dt` en Wh | ✅ |
-| **Eficiencia instantánea `WI`** (Wh/km, lo que el piloto corrige en vivo) | `P / V` (solo si `V > 0.5 km/h`) | ✅ |
-| **Eficiencia promedio `WA`** (Wh/km, el número que define el resultado de la tanda) | `WT / (D/1000)` | ✅ |
+| Eficiencia instantánea `WI` (Wh/km, secundario) | `P / V` (solo si `V > 0.5 km/h`) | ✅ |
+| Eficiencia promedio `WA` (Wh/km, secundario) | `WT / (D/1000)` | ✅ |
+| Energía restante (capacidad − `WT`) | — | ⏳ No implementado |
+| **Potencia objetivo** (energía restante ÷ tiempo restante de carrera) | — | ⏳ No implementado; falta reloj de carrera (minuto 0) |
 
 ### Validez de sensores y recuperación
 
@@ -198,6 +207,11 @@ Más pantallas especiales: `DIAGNOSTICO`, `AYUDA BOTONES`, `CONFIGURACION`,
 
 > **Pendiente de rediseño:** ver `CONTINUACION_DESARROLLO.md §2` para el
 > nuevo orden de pantallas agrupado por relevancia en marcha.
+
+> **Pendiente, prioridad alta:** ninguno de los 14 campos actuales es
+> "potencia objetivo" — el dato central del proyecto (ver
+> `ARQUITECTURA_TELEMETRIA_ECOYPF.md §0`). Candidato a nuevo campo principal,
+> mostrado junto a `PA` (potencia actual) para comparación directa en vivo.
 
 ### Pantalla OLED 0.96" adicional (I2C) ⏸️ en pausa — ver `CONTINUACION_DESARROLLO.md §3`
 

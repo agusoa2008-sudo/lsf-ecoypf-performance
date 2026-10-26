@@ -4,29 +4,34 @@ Instrumentación de a bordo del equipo **La Salle Florida (LSF)** para el Desaf�
 un proyecto de "telemetría" por sí misma: es el sistema que mide, calcula y muestra en tiempo real el
 **performance** del auto, para que el piloto y el equipo técnico puedan maximizarlo durante la carrera.
 
-## El objetivo: bajar el Wh/km
+## El objetivo: potencia objetivo vs. potencia actual
 
-El Desafío Eco YPF es una categoría de **eficiencia energética**, no de velocidad pura. Performance acá
-significa recorrer la mayor distancia posible con la menor energía posible, dentro del tiempo de
-carrera. La métrica que lo resume es **`Wh/km`** (energía consumida por kilómetro recorrido) — cuanto
-más bajo, mejor.
+La prueba de Endurance del Desafío Eco YPF tiene dos restricciones fijas: **80 minutos** de carrera y
+la **energía de las baterías provistas**, selladas y precintadas por la CDA — no se puede agregar ni
+un Wh más. Gana el auto que recorre más distancia con esa energía fija en ese tiempo fijo; quedarse sin
+batería y detenerse en pista es exclusión directa.
 
-Todo lo que este sistema mide existe para producir ese número, en vivo, y dárselo al piloto para que
-pueda corregir su manejo antes de que termine la tanda:
+El dato central que resuelve ese problema en vivo es la **potencia**, no el Wh/km:
 
-- **Tensión y corriente de batería** → potencia instantánea (`P = V × I`) → energía consumida (`Wh`).
-- **Pulsos de velocidad** → velocidad y distancia recorrida (`D`), el denominador de Wh/km.
-- **`P` y `V` combinados** → `Wh/km` instantáneo (lo que el piloto corrige en el momento) y promedio
-  (el resultado final de la tanda).
-- **GPS y tiempo de vuelta** (en desarrollo) → cruza el Wh/km con el ritmo real, porque la estrategia
-  ideal no es gastar lo mínimo posible (eso sería no moverse) sino encontrar el manejo más eficiente
-  sin caer del ritmo mínimo competitivo.
-- **Dashboard en el paddock** → el reglamento prohíbe cualquier cable entre el auto y boxes; el enlace
-  LoRa inalámbrico es la única forma de que el equipo técnico vea el performance en vivo y asesore al
-  piloto por los canales de comunicación autorizados.
+- **Potencia objetivo** = energía restante en la batería ÷ tiempo restante de carrera. Es la potencia
+  constante que, sostenida el resto de la carrera, agota la batería justo en el minuto 80. Se recalcula
+  en vivo a medida que avanza la carrera.
+- **Potencia actual** (promedio reciente, `PA`) — lo que el piloto está gastando en este momento.
+
+Comparar las dos le dice al piloto, sin ambigüedad, si tiene que acelerar (va a sobrar batería) o
+aflojar (se va a quedar sin batería antes de tiempo). Para este auto conviene sostener la potencia
+pareja en vez de alternar picos y valles: el arrastre aerodinámico crece más rápido que la velocidad, y
+la batería de plomo-ácido entrega menos Wh útiles cuanto más fuerte se la descarga (efecto Peukert) —
+el propio diseño conceptual del equipo ya lo señala: *"Conviene un ritmo parejo"*
+(`docs/Instrumentacion_Telemetria_EcoYPF2026.pdf`, §4).
+
+El Wh/km (`WI`/`WA`) se sigue calculando, pero como dato secundario de análisis después de cada tanda —
+no es el número que el piloto mira en vivo para decidir.
 
 El detalle completo de por qué se mide cada cosa está en
-[`docs/ARQUITECTURA_TELEMETRIA_ECOYPF.md §0`](docs/ARQUITECTURA_TELEMETRIA_ECOYPF.md#0-objetivo-performance-no-telemetría-por-sí-misma).
+[`docs/ARQUITECTURA_TELEMETRIA_ECOYPF.md §0`](docs/ARQUITECTURA_TELEMETRIA_ECOYPF.md#0-objetivo-potencia-objetivo-vs-potencia-actual-el-dato-central-del-proyecto).
+**Potencia objetivo todavía no está implementada** en el firmware — falta un reloj de carrera y el
+cálculo de energía restante (ver la tabla de pendientes en ese mismo documento).
 
 ## Arquitectura: tres nodos
 

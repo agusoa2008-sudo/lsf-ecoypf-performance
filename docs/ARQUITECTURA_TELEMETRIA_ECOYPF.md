@@ -24,38 +24,83 @@
   todavía no se integra al flujo de telemetría ni calcula tiempos de vuelta.
 - Requisitos aún pendientes del T190: alimentación independiente (batería propia) y modos deep
   sleep/wake por botón.
+- **v1.4 (2026-10-26):** se redefine el dato central del sistema. El número que el piloto debe mirar
+  en vivo para decidir no es el Wh/km — es **potencia objetivo vs. potencia actual** (ver §0). Wh/km
+  pasa a ser un dato secundario, de análisis post-tanda, no de decisión en vivo.
 
 ---
 
-## 0. Objetivo: performance, no telemetría por sí misma
+## 0. Objetivo: potencia objetivo vs. potencia actual, el dato central del proyecto
 
 Este no es un proyecto de "telemetría" en abstracto: es la instrumentación de a bordo que el equipo
-**LSF** usa para maximizar el **performance** del auto en el Desafío Eco YPF. En una categoría de
-eficiencia energética, performance no significa "más veloz" — significa recorrer la mayor distancia
-posible con la menor energía posible, dentro del tiempo de carrera. Cada sensor, cada cálculo y cada
-pantalla de este sistema existen en función de ese único objetivo.
+**LSF** usa para maximizar el **performance** del auto en la prueba de Endurance del Desafío Eco YPF.
+Esa prueba tiene dos restricciones fijas, no negociables: **80 minutos** de carrera y la **energía de
+las baterías provistas**, selladas y precintadas por la CDA — no se puede agregar ni un Wh más. Gana
+el auto que recorre más distancia con esa energía fija en ese tiempo fijo; quedarse sin batería y
+detenerse en pista es exclusión directa.
 
-**La métrica que define el performance:** `Wh/km` — energía consumida por kilómetro recorrido
-(campos `WI` instantáneo y `WA` promedio, ver §4.3 y §7). Cuanto más bajo, mejor: significa que el
-auto convierte más energía de batería en distancia recorrida. Bajar el Wh/km manteniendo un ritmo de
-carrera competitivo es, literalmente, el objetivo de la categoría.
+**El dato que resuelve ese problema en vivo:**
 
-**Por qué se mide cada cosa — todo apunta al mismo número:**
+- **Potencia objetivo** = energía restante en la batería ÷ tiempo restante de carrera. Es la potencia
+  constante que, sostenida el resto de la carrera, agota la batería justo en el minuto 80 — ni antes
+  (exclusión), ni con sobra (distancia desperdiciada). Se recalcula continuamente a medida que avanza
+  la carrera: si se va gastando de más, la potencia objetivo baja; si se va gastando de menos, sube.
+- **Potencia actual** (`PA`, promedio reciente) — lo que el piloto está gastando en este momento.
 
-| Qué medimos | Por qué, en función del performance |
+Comparar las dos en vivo le dice al piloto, sin ambigüedad, si tiene que acelerar (actual por debajo
+de la objetivo: va a sobrar batería) o aflojar (actual por encima: se va a quedar sin batería antes de
+tiempo). Es la misma cuenta que el documento conceptual original del equipo
+(`Instrumentacion_Telemetria_EcoYPF2026.pdf`, §4) ya definía como **"margen de energía al minuto 80"**
+— expresada como dos potencias directamente comparables en vivo, en vez de un margen abstracto en Wh.
+
+**Por qué conviene sostener la potencia pareja, y no en pulsos ("impulso y deslizamiento"):** para
+este auto, alternar entre potencia alta y nula rinde **menos** distancia que sostener la misma potencia
+promedio de forma constante, por dos razones físicas independientes:
+
+1. El arrastre aerodinámico crece con el cuadrado de la velocidad, así que la potencia necesaria para
+   sostenerla crece todavía más rápido (aprox. con el cubo). Con esa curva potencia–velocidad, pulsar
+   entre picos y valles de potencia siempre da menos velocidad promedio que sostenerla pareja, para el
+   mismo gasto total de energía.
+2. La batería de plomo-ácido entrega **menos** Wh útiles cuanto más fuerte se la descarga (efecto
+   Peukert). El propio documento conceptual del equipo ya lo señala: *"La energía útil del plomo-ácido
+   depende de la corriente: descargar más fuerte entrega menos Wh. Conviene un ritmo parejo."*
+   (`Instrumentacion_Telemetria_EcoYPF2026.pdf`, §4).
+
+**El lugar que le queda al Wh/km (`WI`, `WA`):** deja de ser el dato que el piloto mira en vivo para
+decidir — ese lugar lo ocupa potencia objetivo vs. actual. Wh/km pasa a rol secundario: campo opcional
+en pantalla y, sobre todo, insumo de análisis **después** de cada tanda (registro en microSD, ver
+`FUNCIONALIDADES.md`) para construir la curva potencia→velocidad real del auto con datos de pista —
+justamente lo que permite calibrar, antes de la próxima carrera, qué potencia objetivo es alcanzable
+sin quedarse corto ni pasarse.
+
+**Por qué se mide cada cosa — todo converge en potencia objetivo vs. actual:**
+
+| Qué medimos | Por qué, en función de potencia objetivo vs. actual |
 |---|---|
-| Tensión de las 4 baterías (B1–B4, VBATS) | Es el factor `V` de `P = V × I`. Sin potencia instantánea no hay energía consumida (Wh) y sin Wh no hay Wh/km. Medir banco por banco — no solo el total — permite detectar un banco rindiendo peor que los demás, antes de que arruine el promedio general. |
-| Corriente de batería (ADS1220 + toroide) | Es el factor `I` de la potencia, y la variable que más responde al estilo de manejo (acelerar vs. dejar rodar). Es lo que el piloto puede controlar en tiempo real para bajar el Wh/km. |
-| Pulsos de velocidad → velocidad y distancia | Es el denominador de Wh/km: sin distancia recorrida, la energía gastada no significa nada. También da la velocidad instantánea para aplicar la técnica de "impulso y deslizamiento" (acelerar y dejar rodar en punto muerto) característica de las categorías de eficiencia. |
-| Potencia instantánea y promedio (`P`, `PA`) | Traduce `V × I` a algo que el piloto puede leer y corregir en el momento: si la potencia sube sin que suba la velocidad, está gastando más de lo necesario. |
-| Energía acumulada (`WT`) y Wh/km instantáneo/promedio (`WI`, `WA`) | Es el resultado final: el número que el piloto y el equipo técnico usan para decidir, vuelta a vuelta, si el estilo de manejo está mejorando o empeorando el performance. |
-| GPS / tiempo de vuelta (⏳ pendiente de integrar, ver §5.3) | Permite cruzar Wh/km con el ritmo de cada vuelta: la estrategia ideal no es gastar lo mínimo posible (eso sería no moverse), sino encontrar el manejo que minimiza Wh/km sin caer del ritmo mínimo competitivo. |
-| Registro en microSD (CSV, T190, ver §5.4 en `FUNCIONALIDADES.md`) | Permite analizar después de cada sesión qué tramos de pista o qué maniobras gastaron más energía, para ajustar la estrategia de manejo en la próxima tanda. |
-| Dashboard en el paddock (Paddock S3) | El reglamento prohíbe toda conexión eléctrica entre el auto y boxes (art. 9.4); el enlace LoRa inalámbrico es la única forma de que el equipo técnico vea el performance en vivo y pueda indicarle al piloto, por los canales de comunicación autorizados (art. 13), si debe ajustar el ritmo para cuidar energía. |
+| Tensión de las 4 baterías (B1–B4, VBATS) | Es el factor `V` de `P = V × I`: sin potencia instantánea no hay energía consumida (`WT`) ni energía restante que calcular. Medir banco por banco — no solo el total — detecta un banco rindiendo peor que los demás antes de que afecte la potencia disponible. |
+| Corriente de batería (ADS1220 + toroide) | Es el factor `I` de la potencia; lo que el piloto controla con el acelerador para acercar la potencia actual a la objetivo. |
+| Pulsos de velocidad → velocidad y distancia | Convierte potencia en resultado concreto (km recorridos) y es la base del Wh/km de análisis post-tanda, usado para calibrar bien la próxima potencia objetivo. |
+| Potencia instantánea y promedio (`P`, `PA`) | Es la mitad de la comparación en vivo: "potencia actual". |
+| Energía acumulada (`WT`) | Es el insumo directo de "energía restante" (capacidad de la batería − `WT`), la otra mitad del cálculo de potencia objetivo. |
+| Reloj de carrera (minuto 0 a minuto 80, ⏳ pendiente, ver tabla de insumos abajo) | Da el "tiempo restante" del cálculo de potencia objetivo. Sin esto no se puede calcular en vivo. |
+| GPS / tiempo de vuelta (⏳ pendiente de integrar, ver §5.3) | Candidato natural para marcar el minuto 0 de carrera (al capturar el waypoint de largada) y para cruzar el ritmo por vuelta con la potencia sostenida. |
+| Registro en microSD (CSV, T190, ver §5.4 en `FUNCIONALIDADES.md`) | Permite, después de cada tanda, reconstruir la curva potencia→velocidad real y verificar si la potencia objetivo elegida fue la correcta. |
+| Dashboard en el paddock (Paddock S3) | El reglamento prohíbe toda conexión eléctrica entre el auto y boxes (art. 9.4); el enlace LoRa inalámbrico es la única forma de que el equipo técnico vea potencia objetivo vs. actual en vivo y asesore al piloto por los canales de comunicación autorizados (art. 13). |
 
-En otras palabras: este sistema existe para que el piloto y el equipo técnico vean, en tiempo real, si
-el auto está rindiendo lo que tiene que rendir — y puedan ajustar durante la carrera, no reconstruir
-después de que terminó qué pasó.
+**Qué le falta al sistema para calcular potencia objetivo en vivo (⏳ pendiente, ver §8–9):**
+
+| Insumo | Estado |
+|---|---|
+| Energía consumida (`WT`) | ✅ ya calculada en el Super Mini |
+| Capacidad útil de la batería (Wh) | ✅ ya configurable (`battery_capacity_wh` en el T190) |
+| Energía restante = capacidad − `WT` | ✅ cálculo trivial con lo anterior; falta implementarlo |
+| Marca de inicio de carrera (minuto 0) | ⏳ no existe hoy; falta definir el disparador (botón dedicado, arranque de movimiento, waypoint GPS de largada, o manual desde el AP) |
+| Tiempo restante = 80 min − tiempo transcurrido desde el inicio | ⏳ depende del punto anterior |
+| Potencia objetivo = energía restante ÷ tiempo restante, recalculada en vivo | ⏳ por implementar una vez estén los puntos anteriores |
+| Campo nuevo en pantalla T190: potencia objetivo vs. potencia actual | ⏳ por diseñar — candidato a reemplazar Wh/km como dato principal de pantalla |
+
+En otras palabras: este sistema existe para que el piloto tenga, en vivo, un solo número con el que
+decidir — ¿acelero o aflojo? — para terminar los 80 minutos con la batería justa, ni antes ni con sobra.
 
 ---
 
@@ -346,8 +391,9 @@ extensión futura con campos versionados adicionales.
 | Tensión de 4 baterías (ADS1115) | Super Mini | Super Mini | ✅ Real, sin cambios |
 | Corriente de batería (ADS1220 + toroidal) | Super Mini | Super Mini | ✅ Real, sin cambios |
 | Contador de pulsos (crudo) | Super Mini | Super Mini | ✅ Real, sin cambios |
-| Potencia inst./promedio, Wh, Wh/km | Super Mini | Super Mini | ✅ Calculado en la fuente junto a los sensores |
+| Potencia inst./promedio, Wh, Wh/km | Super Mini | Super Mini | ✅ Calculado en la fuente junto a los sensores; Wh/km queda como dato secundario (ver §0) |
 | Velocidad y distancia (desde pulsos) | Super Mini | Super Mini | ✅ Distancia por delta de pulsos; velocidad por período |
+| **Potencia objetivo vs. potencia actual** (dato central, ver §0) | — | A definir (Super Mini o T190; necesita capacidad de batería y reloj de carrera) | ⏳ No implementado: falta marca de inicio de carrera, cálculo de energía restante/tiempo restante y campo nuevo en pantalla |
 | ESP-NOW Super Mini → T190 | Super Mini, versión 3 | T190 valida V3, secuencia y flags | ✅ Integrado; actualizar los tres firmwares juntos |
 | Configuración T190 → Super Mini por ESP-NOW | T190 AP, guardado en `t190_settings.json` y `config.json` | Factores gruesos B1–B4 y parámetros de velocidad en Super Mini | ✅ Código integrado; falta confirmar el ciclo físico en ambas placas |
 | Ajuste fino B1–B4 y capacidad útil | AP/persistencia local del T190 | T190 | ✅ Implementado; confirmar tensiones/capacidad real en banco |
@@ -367,17 +413,21 @@ extensión futura con campos versionados adicionales.
 
 ## 9. Próximos pasos
 
-1. Actualizar Super Mini, T190 y Paddock como conjunto compatible con protocolo V3; validar flags,
+1. **Diseñar e implementar potencia objetivo vs. potencia actual** (ver §0 y §8): definir dónde vive
+   el cálculo, el disparador del minuto 0 de carrera, y el campo nuevo en la pantalla del T190. Es el
+   dato central del proyecto y hoy no existe en el firmware.
+2. Actualizar Super Mini, T190 y Paddock como conjunto compatible con protocolo V3; validar flags,
    pérdida/duplicación de paquetes y antigüedad visible al cortar ESP-NOW.
-2. Probar el cálculo de distancia por pulsos a muy baja velocidad y calibrar cm por pulso en pista.
-3. Probar desconexión y reinicialización ADS1220; calibrar cero solo con corriente nula usando
+3. Probar el cálculo de distancia por pulsos a muy baja velocidad y calibrar cm por pulso en pista.
+4. Probar desconexión y reinicialización ADS1220; calibrar cero solo con corriente nula usando
    `main.calibrate_current_zero()` si el ADC arrancó tarde.
-4. Probar en banco T190 ↔ Paddock: recepción LoRa, AP WPA2 y actualización del dashboard.
-5. Integrar el GPS al `main.py` del T190 como tarea `asyncio` (hoy solo existe como test standalone).
-6. Definir la lógica de waypoint de largada y detección de cruce para tiempo de vuelta; extender el
+5. Probar en banco T190 ↔ Paddock: recepción LoRa, AP WPA2 y actualización del dashboard.
+6. Integrar el GPS al `main.py` del T190 como tarea `asyncio` (hoy solo existe como test standalone);
+   evaluar usar la captura de waypoint de largada como disparador del minuto 0 de carrera.
+7. Definir la lógica de waypoint de largada y detección de cruce para tiempo de vuelta; extender el
    protocolo versionado con los datos GPS/vuelta.
-7. Medir cuánto bloquea el TX LoRa del T190 y cambiarlo a no bloqueante si retrasa display/ESP-NOW.
-8. Dimensionar/cablear alimentación independiente y enviar consultas al organizador sobre GPS/IMU y
+8. Medir cuánto bloquea el TX LoRa del T190 y cambiarlo a no bloqueante si retrasa display/ESP-NOW.
+9. Dimensionar/cablear alimentación independiente y enviar consultas al organizador sobre GPS/IMU y
    límites de alimentación del art. 11.5.
-9. Declarar el sistema LoRa ante los comisarios técnicos en la verificación previa
-   (art. 13.2).
+10. Declarar el sistema LoRa ante los comisarios técnicos en la verificación previa
+    (art. 13.2).

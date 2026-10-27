@@ -53,19 +53,28 @@ class PageButton:
     esperando a ver si viene un segundo click."""
 
     def __init__(self, pin_in, *, short=lambda: None, double=lambda: None,
-                 long=lambda: None, extra=lambda: None, timings=None, label="Page"):
+                 long=lambda: None, extra=lambda: None, combo=lambda: None,
+                 timings=None, label="Page"):
         self.pin = pin_in
         self.cb_short = short
         self.cb_double = double
         self.cb_long = long
         self.cb_extra = extra
+        self.cb_combo = combo
         self.t = PAGE_DEFAULTS.copy()
         self.t.update(timings or {})
         self.label = label
 
+        # other: el boton "companero" para detectar combos (ver
+        # _handle_release) -- se asigna despues de construir ambos botones,
+        # ej: page_btn.other = btn0; btn0.other = page_btn. Mientras sea
+        # None (o no este presionado), el comportamiento es identico al de
+        # antes de agregar combos.
+        self.other = None
         self._is_pressed = False
         self._press_started = 0
         self._last_short_release = None
+        self._combo_consumed = False
 
     def _fire(self, kind, callback):
         if DEBUG:
@@ -76,6 +85,13 @@ class PageButton:
             callback()
 
     def _handle_release(self, now):
+        if self._combo_consumed:
+            # Esta liberacion ya se uso como la mitad "sostenida" de un
+            # combo disparado por el otro boton (ver mas abajo) -- no debe
+            # disparar ademas su propio gesto individual (ej. "long").
+            self._combo_consumed = False
+            return
+
         duration = _diff(now, self._press_started)
         short_ms = int(self.t.get("SHORT_MS", PAGE_DEFAULTS["SHORT_MS"]))
         long_ms = int(self.t.get("LONG_MS", PAGE_DEFAULTS["LONG_MS"]))
@@ -89,13 +105,22 @@ class PageButton:
             self._fire("long", self.cb_long)
             self._last_short_release = None
         elif duration <= short_ms:
-            self._fire("short", self.cb_short)
-            if (self._last_short_release is not None and
-                    _diff(now, self._last_short_release) <= double_ms):
-                self._fire("double", self.cb_double)
+            if self.other is not None and self.other._is_pressed:
+                # El otro boton esta sostenido mientras este se suelta
+                # corto -- combo en vez de short/double. Se marca al otro
+                # para que, cuando finalmente se suelte, no dispare ademas
+                # su propio gesto largo/extra.
+                self._fire("combo", self.cb_combo)
+                self.other._combo_consumed = True
                 self._last_short_release = None
             else:
-                self._last_short_release = now
+                self._fire("short", self.cb_short)
+                if (self._last_short_release is not None and
+                        _diff(now, self._last_short_release) <= double_ms):
+                    self._fire("double", self.cb_double)
+                    self._last_short_release = None
+                else:
+                    self._last_short_release = now
         else:
             # Zona muerta SHORT_MS..LONG_MS: sin accion, a proposito.
             self._last_short_release = None

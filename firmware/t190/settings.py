@@ -11,6 +11,11 @@ TEMP_FILE = "t190_settings.tmp"
 BACKUP_FILE = "t190_settings.bak"
 ENERGY_SAVE_INTERVAL_MS = 60000
 
+# Endurance Eco YPF: 80 minutos fijos de carrera (ver docs/ARQUITECTURA_
+# TELEMETRIA_ECOYPF.md §0) -- usado por race_remaining_s()/potencia objetivo.
+RACE_DURATION_S = 80 * 60
+RACE_STATES = ("idle", "running", "paused", "finished")
+
 DEFAULTS = {
     "b_supermini_factors_milli": [1000, 1000, 1000, 1000],
     "ads_mode": "cumulative",
@@ -31,6 +36,17 @@ DEFAULTS = {
     "supermini_max_speed_kmh": 80.0,
     "supermini_config_revision": 1,
     "precharge_wh": 0.0,
+    # Reloj de carrera (ver T190Settings.race_*) -- sobrevive deep sleep y
+    # reboot via persistencia en este mismo archivo.
+    "race_state": "idle",
+    "race_start_ts": None,
+    "race_elapsed_accum_s": 0.0,
+    # Energia restante con correccion Peukert (ver note_effective_energy).
+    # n=1.0 y i_ref=0.0 (automatico) dejan el modelo IDENTICO al lineal
+    # hasta que se calibren con datos reales (docs/CALIBRACION_PEUKERT.md).
+    "peukert_n": 1.0,
+    "peukert_i_ref": 0.0,
+    "energy_used_effective_wh": 0.0,
 }
 
 
@@ -181,6 +197,26 @@ def _validated_values(data):
     merged["supermini_config_revision"] = int(revision_value)
     merged["precharge_wh"] = _valid_number(
         merged.get("precharge_wh", 0.0), "precharge_wh", 0, 5000)
+
+    race_state = merged.get("race_state", "idle")
+    if race_state not in RACE_STATES:
+        raise ValueError("race_state debe ser uno de {}".format(RACE_STATES))
+    merged["race_state"] = race_state
+    race_start_ts = merged.get("race_start_ts")
+    if race_start_ts is not None:
+        merged["race_start_ts"] = _valid_number(
+            race_start_ts, "race_start_ts", 0, 4294967295)
+    merged["race_elapsed_accum_s"] = _valid_number(
+        merged.get("race_elapsed_accum_s", 0.0), "race_elapsed_accum_s",
+        0, RACE_DURATION_S)
+
+    merged["peukert_n"] = _valid_number(
+        merged.get("peukert_n", 1.0), "peukert_n", 1.0, 1.5)
+    merged["peukert_i_ref"] = _valid_number(
+        merged.get("peukert_i_ref", 0.0), "peukert_i_ref", 0, 1000)
+    merged["energy_used_effective_wh"] = _valid_number(
+        merged.get("energy_used_effective_wh", 0.0),
+        "energy_used_effective_wh", 0, 10000000)
     return merged
 
 
@@ -334,12 +370,122 @@ class T190Settings:
     def precharge_wh(self):
         return self.values.get("precharge_wh", 0.0)
 
+    # ── Reloj de carrera (80 min fijos, ver docs/ARQUITECTURA_TELEMETRIA_
+    # ECOYPF.md §0) ──────────────────────────────────────────────────────
+    @property
+    def race_state(self):
+        return self.values.get("race_state", "idle")
+
+    def race_elapsed_s(self):
+        """Segundos transcurridos del segmento RUNNING actual (si lo hay)
+        mas lo acumulado de segmentos anteriores. max(0, ...) porque si el
+        T190 perdio toda la alimentacion (no solo deep sleep) el RTC puede
+        volver a epoca 0 hasta que el GPS lo resincronice -- sin el guard,
+        time.time()-race_start_ts daria un numero negativo gigante."""
+        accum = self.values.get("race_elapsed_accum_s", 0.0)
+        start_ts = self.values.get("race_start_ts")
+        if self.race_state == "running" and start_ts is not None:
+            return accum + max(0.0, time.time() - start_ts)
+        return accum
+
+    def race_remaining_s(self):
+        return max(0.0, RACE_DURATION_S - self.race_elapsed_s())
+
+    def race_start(self):
+        self.values["race_state"] = "running"
+        self.values["race_start_ts"] = time.time()
+        self.values["race_elapsed_accum_s"] = 0.0
+        self._persist()
+
+    def race_pause(self):
+        self.values["race_elapsed_accum_s"] = self.race_elapsed_s()
+        self.values["race_state"] = "paused"
+        self.values["race_start_ts"] = None
+        self._persist()
+
+    def race_resume(self):
+        self.values["race_state"] = "running"
+        self.values["race_start_ts"] = time.time()
+        self._persist()
+
+    def race_finish(self):
+        self.values["race_state"] = "finished"
+        self.values["race_elapsed_accum_s"] = RACE_DURATION_S
+        self.values["race_start_ts"] = None
+        self._persist()
+
+    def race_reset(self):
+        self.values["race_state"] = "idle"
+        self.values["race_start_ts"] = None
+        self.values["race_elapsed_accum_s"] = 0.0
+        self._persist()
+
+    # ── Energia restante con correccion Peukert (ver docs/CALIBRACION_
+    # PEUKERT.md) ────────────────────────────────────────────────────────
+    @property
+    def peukert_n(self):
+        return self.values.get("peukert_n", 1.0)
+
+    @property
+    def peukert_i_ref(self):
+        """Corriente de referencia (A) de la capacidad nominal. 0.0 =
+        "automatico": se deriva de la capacidad configurada asumiendo pack
+        de 48V nominal (4x12V serie) a regimen de 20h -- con los 816Wh de
+        fabrica da unos 0.85A. Calibrar con datos reales de descarga."""
+        stored = self.values.get("peukert_i_ref", 0.0)
+        if stored > 0:
+            return stored
+        return self.battery_capacity_wh / 48.0 / 20.0
+
+    @property
+    def energy_used_effective_wh(self):
+        return self.values.get("energy_used_effective_wh", 0.0)
+
+    @property
+    def energy_remaining_peukert_wh(self):
+        if not self.energy_baseline_set or self.battery_capacity_wh <= 0:
+            return None
+        return max(0.0, self.battery_capacity_wh - self.energy_used_effective_wh)
+
+    def note_effective_energy(self, p_inst_w, i_bat_a):
+        """Acumula consumo "efectivo" ponderado por la tasa de descarga
+        (factor=(|I|/I_ref)**(n-1); con n=1 el factor es siempre 1, o sea
+        identico al acumulado lineal de battery_used_wh -- ver
+        DEFAULTS["peukert_n"]). Mismo patron de persistencia throttled que
+        note_source_energy/note_source_distance, pero con dt del reloj
+        local del T190 (no hay un contador de vida entera del Super Mini
+        que integrar aca: el factor depende de la corriente INSTANTANEA de
+        cada muestra, no de un delta acumulado)."""
+        now = time.ticks_ms()
+        last_ms = getattr(self, "_last_effective_sample_ms", None)
+        self._last_effective_sample_ms = now
+        if last_ms is None:
+            return   # primera muestra tras boot: sin dt confiable todavia
+        dt_h = time.ticks_diff(now, last_ms) / 3_600_000.0
+        if dt_h <= 0:
+            return
+        i_ref = self.peukert_i_ref
+        n = self.peukert_n
+        factor = (abs(i_bat_a) / i_ref) ** (n - 1) if i_ref > 0 else 1.0
+        delta_wh = p_inst_w * dt_h * factor
+        self.values["energy_used_effective_wh"] = (
+            self.values.get("energy_used_effective_wh", 0.0) + delta_wh)
+        self._dirty = self._dirty or delta_wh != 0
+        if self._dirty and time.ticks_diff(
+                now, self._last_save_ms) >= ENERGY_SAVE_INTERVAL_MS:
+            self._persist()
+
+    def reset_effective_energy(self):
+        self.values["energy_used_effective_wh"] = 0.0
+        self._persist()
+
     def update_configuration(self, b_supermini_factors_milli, ads_mode,
                              battery_capacity_wh, meters_per_pulse,
                              debounce_us, max_speed_kmh,
                              idle_sleep_timeout_min,
                              mark_charged=False, source_boot=None,
-                             source_wh=None, precharge_wh=0.0):
+                             source_wh=None, precharge_wh=0.0,
+                             peukert_n=1.0, peukert_i_ref=0.0):
         new_factors = _validated_factors(
             b_supermini_factors_milli, "factores de tensión Super Mini")
         if ads_mode not in ("cumulative", "individual"):
@@ -358,6 +504,9 @@ class T190Settings:
             idle_sleep_timeout_min, "tiempo para deep sleep", 0, 240)
         if sleep_value != int(sleep_value):
             raise ValueError("tiempo para deep sleep debe ser entero")
+        peukert_n_value = _valid_number(peukert_n, "peukert_n", 1.0, 1.5)
+        peukert_i_ref_value = _valid_number(
+            peukert_i_ref, "peukert_i_ref", 0, 1000)
 
         supermini_changed = (
             meters_per_pulse != self.supermini_meters_per_pulse or
@@ -378,11 +527,14 @@ class T190Settings:
             revision = self.supermini_config_revision + 1
             self.values["supermini_config_revision"] = (
                 1 if revision > 0xFFFFFFFF else revision)
+        self.values["peukert_n"] = peukert_n_value
+        self.values["peukert_i_ref"] = peukert_i_ref_value
         if mark_charged:
             self.values["battery_used_wh"] = 0.0
             self.values["energy_baseline_set"] = True
             self.values["energy_source_boot"] = source_boot
             self.values["energy_source_wh"] = source_wh
+            self.values["energy_used_effective_wh"] = 0.0
         self.values["precharge_wh"] = _valid_number(
             precharge_wh, "Wh de precarga", 0, 5000)
         self._persist()
@@ -392,6 +544,7 @@ class T190Settings:
         self.values["energy_baseline_set"] = True
         self.values["energy_source_boot"] = source_boot
         self.values["energy_source_wh"] = source_wh
+        self.values["energy_used_effective_wh"] = 0.0
         self._persist()
 
     def reset_trip_distance(self, source_boot=None, source_dist_m=None):

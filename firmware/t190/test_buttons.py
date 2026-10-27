@@ -35,6 +35,7 @@ def _handlers(label):
         "double": lambda: log("double"),
         "long": lambda: log("long"),
         "extra": lambda: log("extra"),
+        "combo": lambda: log("combo"),
     }
 
 
@@ -43,15 +44,19 @@ btn0_h = _handlers("BTN0")
 s3_btn = InterruptPageButton(
     Pin(HW.PAGE_BTN_PIN, Pin.IN, Pin.PULL_UP),
     short=s3_h["short"], double=s3_h["double"],
-    long=s3_h["long"], extra=s3_h["extra"], label="S3",
+    long=s3_h["long"], extra=s3_h["extra"], combo=s3_h["combo"], label="S3",
     irq_trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, debounce_ms=25,
 )
 btn0_btn = InterruptPageButton(
     Pin(HW.BTN0_PIN, Pin.IN, Pin.PULL_UP),
     short=btn0_h["short"], double=btn0_h["double"],
-    long=btn0_h["long"], extra=btn0_h["extra"], label="BTN0",
+    long=btn0_h["long"], extra=btn0_h["extra"], combo=btn0_h["combo"], label="BTN0",
     irq_trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING, debounce_ms=25,
 )
+# Wiring cruzado para que cada boton sepa si el otro esta sostenido (ver
+# buttons.py: PageButton._handle_release) -- sin esto, "combo" nunca dispara.
+s3_btn.other = btn0_btn
+btn0_btn.other = s3_btn
 
 print("[test_buttons] S3=GPIO{} BTN0=GPIO{} IRQ debounce=25ms -- "
       "short<={}ms double window={}ms long>={}ms extra>={}ms".format(
@@ -60,7 +65,9 @@ print("[test_buttons] S3=GPIO{} BTN0=GPIO{} IRQ debounce=25ms -- "
     s3_btn.t["LONG_MS"], s3_btn.t["EXTRA_MS"]))
 print("[test_buttons] probar: click corto, doble click rapido, mantener "
       "~0.5-1.1s (sin accion), ~1.5s (long), ~2.5s+ (extra), "
-      "en cada boton. Ctrl-C para salir.")
+      "en cada boton. Ademas: sostener uno y tocar corto el otro -> combo "
+      "(y el sostenido NO debe disparar tambien su propio long/extra al "
+      "soltarlo). Ctrl-C para salir.")
 
 
 async def _main():

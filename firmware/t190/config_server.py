@@ -137,6 +137,14 @@ Individual: cada canal mide su bateria directamente con divisor propio.</small>
 Pack cargado ahora (reiniciar consumo desde carga completa)</label>
 <label>Minutos sin movimiento antes de deep sleep (0 = desactivado)</label>
 <input name="sleep_timeout_min" type="number" min="0" max="240" step="1" value="@SLEEP@" required>
+<label>Exponente Peukert (n)</label>
+<input name="peukert_n" type="number" min="1.0" max="1.5" step="0.01" value="@PEUKERT_N@" required>
+<small>1.0 = sin efecto (modelo lineal actual). Calibrar despues de pruebas reales con el log SD
+— ver docs/CALIBRACION_PEUKERT.md.</small>
+<label>Corriente de referencia Peukert I_ref (A, 0 = automatico)</label>
+<input name="peukert_i_ref" type="number" min="0" max="1000" step="0.01" value="@PEUKERT_IREF@" required>
+<small>0 = se calcula de la capacidad del pack (Ah nominal / 20h). Ingresar un valor solo si se
+calibro con pruebas reales.</small>
 
 <h2>Super Mini — velocidad</h2>
 <label>Recorrido por pulso (cm/pulso)</label>
@@ -324,6 +332,10 @@ class ConfigServer:
             self.settings.supermini_max_speed_kmh))
         page = page.replace("@PRECHARGE@", str(
             int(self.settings.precharge_wh)))
+        page = page.replace("@PEUKERT_N@", "{:.2f}".format(
+            self.settings.peukert_n))
+        page = page.replace("@PEUKERT_IREF@", "{:.2f}".format(
+            self.settings.values.get("peukert_i_ref", 0.0)))
         page = page.replace("@SM_STATUS@", self.get_supermini_status())
         return page
 
@@ -610,12 +622,21 @@ class ConfigServer:
                     charged = fields.get("mark_charged") == "1"
                     precharge_wh = float(
                         fields.get("precharge_wh", "0") or "0")
+                    peukert_n = float(fields.get(
+                        "peukert_n", str(self.settings.peukert_n)))
+                    if not 1.0 <= peukert_n <= 1.5:
+                        raise ValueError("exponente Peukert fuera de rango")
+                    peukert_i_ref = float(fields.get("peukert_i_ref", "0") or "0")
+                    if not 0 <= peukert_i_ref <= 1000:
+                        raise ValueError(
+                            "corriente de referencia Peukert fuera de rango")
                     source_boot, source_wh = self.get_source_cursor()
                     self.apply_settings(
                         b_supermini_factors, ads_mode, capacity, charged,
                         source_boot, source_wh,
                         meters_per_pulse, debounce_us, max_speed_kmh,
-                        sleep_timeout_min, precharge_wh)
+                        sleep_timeout_min, precharge_wh,
+                        peukert_n, peukert_i_ref)
                     stop_after_response = True
                     body = ("<html><meta name='viewport' content='width=device-width'>"
                             "<body>Configuracion guardada. Los ajustes se enviaran "

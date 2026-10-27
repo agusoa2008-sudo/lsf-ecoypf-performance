@@ -18,20 +18,32 @@
 #   Fila de arriba: estado del link ESP-NOW (antes tenia hints de
 #   navegacion prev/next, se saco para dejar lugar al estado).
 #
-# - Dos botones (ver HW.py y ARQUITECTURA_TELEMETRIA_ECOYPF.md §5):
-#     short dispara siempre al instante al soltar; double es un evento
-#     ADICIONAL (no exclusivo) que se suma si el segundo tap llega dentro
-#     de DOUBLE_MS -- ver buttons.py. Un doble tap rapido ejecuta short
-#     y double juntos.
-#     BTN0  (GPIO0)  short          -> pantalla siguiente
-#     BTN0  (GPIO0)  double         -> volver a VELOCIDAD; cancela AP si activo
-#     BTN0  (GPIO0)  long           -> iniciar/detener log SD; en CONFIG
-#                                     inicia/detiene el AP de configuración
-#     S3    (GPIO21) short          -> pantalla anterior
-#                                     / cancelar AP y volver a VELOCIDAD
-#     S3    (GPIO21) double         -> reset de viaje
-#     S3    (GPIO21) long           -> capturar waypoint GPS
+# - Pantallas: PAGES (definida cerca del final del archivo) reemplaza la
+#   vieja lista plana FIELDS -- cada pagina es un descriptor con su propia
+#   funcion de dibujo y, opcionalmente, una accion contextual para BTN0
+#   corto (ver _on_btn0_short_contextual). Pagina 0 = CARRERA (home).
+#
+# - Dos botones (ver HW.py y ARQUITECTURA_TELEMETRIA_ECOYPF.md §5). Short
+#   dispara siempre al instante al soltar; double es un evento ADICIONAL
+#   (no exclusivo) que se suma si el segundo tap llega dentro de DOUBLE_MS
+#   -- ver buttons.py. Combo: si se suelta un boton en modo "short" MIENTRAS
+#   el otro esta sostenido, dispara el gesto "combo" de ese boton en vez de
+#   short/double (ver buttons.py: PageButton._handle_release).
+#     BTN0  (GPIO0)  corto          -> contextual: en CARRERA inicia/pausa
+#                                     el reloj de carrera; en CONFIGURACION
+#                                     abre/cierra el AP; en CARGA reinicia
+#                                     la sesion; resto: sin accion
+#     BTN0  (GPIO0)  doble          -> pantalla siguiente
+#     BTN0  (GPIO0)  largo          -> ir a CARRERA (home)
+#     BTN0  (GPIO0)  extra (>=2.2s) -> reset local (viaje + carrera + Peukert)
+#     BTN0 sostenido + S3 corto     -> reset remoto del Super Mini (combo,
+#                                     con doble confirmacion -- ver Fase 5)
+#     S3    (GPIO21) corto          -> capturar waypoint GPS (largada/
+#                                     llegada, para contar vueltas)
+#     S3    (GPIO21) doble          -> pantalla anterior
+#     S3    (GPIO21) largo          -> ir a CONFIGURACION
 #     S3    (GPIO21) extra (>=2.2s) -> deep sleep al soltar
+#     S3 sostenido + BTN0 corto     -> alternar log SD (combo)
 #
 # Patron "REPL libre": toda la app corre en un _thread aparte (igual que
 # uPy reference Martin/FC Upy/eBike Old/inDev/t.py). Al bootear, main.py
@@ -42,6 +54,7 @@
 
 import _thread
 import sys
+import math
 import time
 import machine
 import esp32
@@ -56,7 +69,7 @@ from espnow_link import EspNowLink, mac_str
 from battery import percent_from_voltage
 from gps import GPSReceiver
 from sd_logger import TripLogger
-from settings import T190Settings
+from settings import T190Settings, RACE_DURATION_S
 from config_server import ConfigServer, AP_SSID, AP_IP
 import seven_seg
 from fonts import seven_segment_80 as SEG80
@@ -73,30 +86,22 @@ GRAY = rgb565(220, 220, 220)
 RED = rgb565(220, 40, 40)
 GREEN = rgb565(40, 200, 40)
 
-# ── Pantallas en orden de uso: marcha, consumo, viaje y diagnostico ─────────
-# 6-element tuple: (grupo, label, codigo, unidad, fmt, getter)
-# Optional 7th element: (sec_label, sec_fmt, sec_getter) — small text below label
-FIELDS = [
-    ("RUTA",        "VELOCIDAD",      "SPD", "km/h",  "{:.1f}", lambda s: s.speed_kmh,
-     ("", "{}", lambda s: "Wh/km:{:.1f}  SAT:{}".format(
-         _trip_whkm_avg(),
-         _gps.satellites if _gps is not None else "--"))),
-    ("EFICIENCIA",  "Wh/km PROM",     "WA",  "Wh/km", "{:.1f}", lambda s: _trip_whkm_avg()),
-    ("CONSUMO",     "POT PROM 5s",    "PA",  "W",     "{:.0f}", lambda s: s.p_avg5s),
-    ("CONSUMO",     "POT INSTANT",    "PI",  "W",     "{:.0f}", lambda s: s.p_inst),
-    ("CONSUMO",     "CORRIENTE",      "I",   "A",     "{:.2f}", lambda s: s.i_bat),
-    ("EFICIENCIA",  "Wh/km INSTANT",  "WI",  "Wh/km", "{:.1f}", lambda s: s.whkm_inst),
-    ("VIAJE",       "DISTANCIA",      "DST", "m",     "{:.0f}",
-     lambda s: _settings.trip_distance_m if _settings else 0.0),
-    ("VIAJE",       "ENERGIA",        "WT",  "Wh",    "{:.1f}",
-     lambda s: _settings.battery_used_wh if _settings else 0.0),
-    ("BATERIA",     "BATERIA 1",      "B1",  "V",     "{:.2f}", lambda s: s.v_b1),
-    ("BATERIA",     "BATERIA 2",      "B2",  "V",     "{:.2f}", lambda s: s.v_b2),
-    ("BATERIA",     "BATERIA 3",      "B3",  "V",     "{:.2f}", lambda s: s.v_b3),
-    ("BATERIA",     "BATERIA 4",      "B4",  "V",     "{:.2f}", lambda s: s.v_b4),
-    ("BATERIA",     "VBATS TOTAL",    "TOT", "V",     "{:.2f}", lambda s: s.v_bats),
-    ("CALIBRACION", "PULSOS",         "PLS", "",      "{}", lambda s: s.pulse_count),
-]
+# ── Pantallas: ver PAGES, definida cerca del final de este archivo (luego
+# de las funciones _draw_* y de los handlers de boton que referencia, ya
+# que la lista se construye en orden de ejecucion del modulo). Reemplaza a
+# la vieja lista plana FIELDS + los offsets fijos len(FIELDS)+N.
+
+# Umbrales de cruce de vuelta por GPS (ver _check_lap_crossing) -- 15m de
+# tolerancia alrededor del waypoint capturado con S3 corto, con cooldown
+# para no contar como varias vueltas un paso lento por la linea.
+LAP_CROSS_THRESHOLD_M = 15.0
+LAP_COOLDOWN_MS = 20000
+
+# Reset remoto del Super Mini (combo BTN0 sostenido + S3 corto, ver Fase 5):
+# doble confirmacion (primer combo arma, hay que repetirlo dentro de esta
+# ventana) + timeout de espera del ACK del Super Mini.
+REMOTE_RESET_CONFIRM_WINDOW_MS = 5000
+RESET_ACK_TIMEOUT_MS = 4000
 
 AUTO_START = True
 IDLE_SLEEP_TIMEOUT_MS = 20 * 60 * 1000
@@ -131,7 +136,11 @@ _battery_adc_raw = None
 _battery_adc_pin_voltage = None
 _battery_adc_read_method = None
 _gps = None
-_gps_start = None
+_lap_waypoint = None       # (lat, lon) capturado con S3 corto -- largada/llegada
+_lap_count = 0
+_last_lap_time_s = None
+_lap_start_ms = None
+_lap_last_cross_ms = 0
 _gps_clock_synced = False
 _gps_time_update_seen = 0
 _gps_last_rtc_sync_ms = 0
@@ -151,6 +160,12 @@ _sleep_warn_reason = None   # "idle" (parado) o "lost" (Super Mini ausente)
 _toast_text = None          # confirmacion momentanea (waypoint, reset), o None
 _toast_started_ms = 0
 TOAST_DURATION_MS = 4000
+
+# Reset remoto del Super Mini (ver _on_remote_reset_request/Fase 5)
+_reset_request_id = 0
+_reset_ack_status = None    # None|"pending"|"ok"|"rejected"|"failed"|"timeout"
+_reset_ack_deadline_ms = 0
+_remote_reset_armed_until_ms = 0
 
 
 # ── Hardware ─────────────────────────────────────────────────────────────────
@@ -246,10 +261,11 @@ def make_sd_logger(spi):
     return logger
 
 
-def make_espnow(on_telemetry, on_config_ack):
+def make_espnow(on_telemetry, on_config_ack, on_reset_ack):
     try:
         link = EspNowLink(
-            on_telemetry=on_telemetry, on_config_ack=on_config_ack)
+            on_telemetry=on_telemetry, on_config_ack=on_config_ack,
+            on_reset_ack=on_reset_ack)
         if link.paired:
             print("[espnow] OK, peer recordado:", mac_str(link.peer))
         else:
@@ -356,20 +372,69 @@ def _art_timestamp():
         tm[0], tm[1], tm[2], tm[3], tm[4], tm[5])
 
 
+def _format_mmss(seconds):
+    seconds = max(0, int(seconds))
+    return "{:02d}:{:02d}".format(seconds // 60, seconds % 60)
+
+
+def _power_target_w():
+    """Potencia objetivo (W) = energia restante (Peukert) / tiempo restante
+    de carrera -- ver docs/ARQUITECTURA_TELEMETRIA_ECOYPF.md §0. None si la
+    carrera no esta corriendo o todavia no hay linea de base de energia."""
+    if _settings is None or _settings.race_state != "running":
+        return None
+    remaining_s = _settings.race_remaining_s()
+    if remaining_s <= 0:
+        return None
+    energy_wh = _settings.energy_remaining_peukert_wh
+    if energy_wh is None:
+        return None
+    return energy_wh / (remaining_s / 3600.0)
+
+
+def _approx_distance_m(lat1, lon1, lat2, lon2):
+    """Distancia aproximada (equirectangular) -- de sobra para las
+    distancias cortas de una linea de largada/llegada de pista."""
+    lat_rad = math.radians((lat1 + lat2) / 2.0)
+    dlat_m = (lat2 - lat1) * 111320.0
+    dlon_m = (lon2 - lon1) * 111320.0 * math.cos(lat_rad)
+    return math.sqrt(dlat_m * dlat_m + dlon_m * dlon_m)
+
+
+def _check_lap_crossing():
+    """Si hay un waypoint de largada/llegada capturado (S3 corto) y el fix
+    GPS actual esta a menos de LAP_CROSS_THRESHOLD_M, cuenta una vuelta --
+    con cooldown para no contar varias veces un paso lento por la linea."""
+    global _lap_count, _last_lap_time_s, _lap_start_ms, _lap_last_cross_ms
+    global _dirty
+    if _lap_waypoint is None or _gps is None:
+        return
+    fix = _gps.latest_fix()
+    if fix is None:
+        return
+    now = time.ticks_ms()
+    if time.ticks_diff(now, _lap_last_cross_ms) < LAP_COOLDOWN_MS:
+        return
+    distance_m = _approx_distance_m(
+        _lap_waypoint[0], _lap_waypoint[1], fix["latitude"], fix["longitude"])
+    if distance_m > LAP_CROSS_THRESHOLD_M:
+        return
+    _lap_count += 1
+    if _lap_start_ms is not None:
+        _last_lap_time_s = time.ticks_diff(now, _lap_start_ms) / 1000.0
+    _lap_start_ms = now
+    _lap_last_cross_ms = now
+    _show_toast("Vuelta {} -- {}".format(
+        _lap_count, _format_mmss(_last_lap_time_s or 0)))
+    _dirty = True
+
+
 def _page_count():
-    return len(FIELDS) + 4
+    return len(PAGES)
 
 
 def _page_label(idx):
-    if idx == len(FIELDS):
-        return "DIAGNOSTICO"
-    if idx == len(FIELDS) + 1:
-        return "AYUDA BOTONES"
-    if idx == len(FIELDS) + 2:
-        return "CONFIGURACION"
-    if idx == len(FIELDS) + 3:
-        return "CARGA"
-    return "{} / {}".format(FIELDS[idx][0], FIELDS[idx][1])
+    return PAGES[idx]["label"]
 
 
 def _draw_diagnostics(tft, idx):
@@ -405,7 +470,7 @@ def _draw_diagnostics(tft, idx):
     else:
         sd_detail = "no montada"
         sd_color = RED
-    tft.text(("SD: " + sd_detail)[:39], 8, 53, sd_color)
+    tft.text(("SD: " + sd_detail)[:39], 8, 48, sd_color)
 
     if _gps is None:
         gps_text, gps_color = "GPS: no inicializado", RED
@@ -415,30 +480,41 @@ def _draw_diagnostics(tft, idx):
     else:
         gps_text = "GPS sin fix sats:{}".format(_gps.satellites)
         gps_color = GRAY
-    tft.text(gps_text[:39], 8, 76, gps_color)
+    tft.text(gps_text[:39], 8, 66, gps_color)
 
     timestamp = _art_timestamp()
     clock_text = "ART: {}".format(timestamp) if timestamp else "ART: esperando hora GPS"
-    tft.text(clock_text[:39], 8, 99, WHITE if timestamp else GRAY)
-    tft.text("GPS bytes invalidos: {}".format(
-        _gps.invalid_bytes if _gps is not None else "--"), 8, 119, GRAY)
+    tft.text(clock_text[:39], 8, 84, WHITE if timestamp else GRAY)
+
+    if _settings is not None:
+        race_text = "CARRERA {} T:{} R:{}".format(
+            _settings.race_state.upper(),
+            _format_mmss(_settings.race_elapsed_s()),
+            _format_mmss(_settings.race_remaining_s()))
+        race_color = GREEN if _settings.race_state == "running" else GRAY
+    else:
+        race_text, race_color = "CARRERA: sin datos", GRAY
+    tft.text(race_text[:39], 8, 102, race_color)
+
     if _battery_voltage is None:
         battery_text, battery_color = "T190 BAT: lectura no valida", RED
     else:
         battery_text = "T190 {:.2f}V  {}%  ADC:{}".format(
             _battery_voltage, _battery_percent, _battery_adc_raw)
         battery_color = GREEN
-    tft.text(battery_text[:39], 8, 132, battery_color)
-    if (_settings is not None and _settings.battery_percent is not None):
-        pack_text = "PACK {}%  {:.0f}/{:.0f}Wh".format(
+    tft.text(battery_text[:39], 8, 120, battery_color)
+
+    if _settings is not None and _settings.battery_percent is not None:
+        peukert_rem = _settings.energy_remaining_peukert_wh
+        pack_text = "PACK {}%  lin:{:.0f} peuk:{:.0f}Wh".format(
             _settings.battery_percent, _settings.battery_remaining_wh,
-            _settings.battery_capacity_wh)
+            peukert_rem if peukert_rem is not None else 0.0)
         pack_color = GREEN
     elif _settings is not None and _settings.battery_capacity_wh > 0:
         pack_text, pack_color = "PACK: marca carga completa", GRAY
     else:
         pack_text, pack_color = "PACK: capacidad sin configurar", GRAY
-    tft.text(pack_text[:39], 8, 150, pack_color)
+    tft.text(pack_text[:39], 8, 138, pack_color)
     tft.show()
 
 
@@ -448,15 +524,15 @@ def _draw_configuration(tft, idx):
     tft.hline(0, 22, tft.width, rgb565(70, 80, 90))
     tft.text("AJUSTES DESDE EL TELEFONO", 8, 37, WHITE)
     if _CONFIG_AP_RUNNING:
-        tft.text("BTN0 1.2-<2.2s: AP ON/OFF", 8, 62, WHITE)
-        tft.text("S3 corto/BTN0 doble: cancelar", 8, 83, WHITE)
+        tft.text("BTN0 corto: AP ON/OFF", 8, 62, WHITE)
+        tft.text("BTN0 largo: cancelar y volver", 8, 83, WHITE)
         tft.text("SSID: {}".format(AP_SSID), 8, 105, GREEN)
         tft.text("http://{}/".format(AP_IP), 8, 127, GREEN)
         tft.text("WPA2: lasalle2026", 8, 149, WHITE)
     else:
-        tft.text("VELOCIDAD: S3 corto -> CONFIG", 8, 62, WHITE)
-        tft.text("BTN0 1.2-<2.2s: iniciar AP", 8, 83, WHITE)
-        tft.text("BTN0 doble: volver VELOCIDAD", 8, 105, GRAY)
+        tft.text("BTN0 corto: iniciar AP", 8, 62, WHITE)
+        tft.text("BTN0 largo: volver a CARRERA", 8, 83, WHITE)
+        tft.text("S3 largo: venir aqui", 8, 105, GRAY)
         if _settings is not None:
             factors = _settings.b_supermini_factors_milli
             tft.text("Factores B1..4: {} {} {} {}".format(
@@ -508,10 +584,10 @@ def _draw_carga(tft, idx):
     wh_shown = precharge + _charge_wh_accum
     tft.text("Wh+: {:.1f}   base: {:.0f}Wh".format(wh_shown, precharge), 8, 126, WHITE)
     if _charge_session_active:
-        tft.text(("Sesion: {:.1f}Wh  BTN0 largo=reset".format(
+        tft.text(("Sesion: {:.1f}Wh  BTN0 corto=reset".format(
             _charge_wh_accum))[:38], 8, 138, GREEN)
     else:
-        tft.text("Esperando carga...  BTN0 largo=reset", 8, 138, GRAY)
+        tft.text("Esperando carga...  BTN0 corto=reset", 8, 138, GRAY)
     tft.show()
 
 
@@ -524,10 +600,10 @@ def _draw_help(tft, idx):
     tft.hline(0, 17, tft.width, G)
 
     # Column headers
-    tft.text("BTN0 / GPIO0", 4, 24, GREEN)
-    tft.text("S3 / GPIO21", C + 4, 24, GREEN)
-    tft.hline(0, 35, tft.width, D)
-    tft.vline(C, 17, 88, D)
+    tft.text("BTN0 / GPIO0", 4, 22, GREEN)
+    tft.text("S3 / GPIO21", C + 4, 22, GREEN)
+    tft.hline(0, 33, tft.width, D)
+    tft.vline(C, 17, 71, D)
 
     # Gesture rows  — label x=4/C+4, action x=52/C+52
     LBL = 4
@@ -538,17 +614,19 @@ def _draw_help(tft, idx):
         tft.text(gesture, C + LBL, y, GRAY)
         tft.text(right_action, C + ACT,  y, WHITE)
 
-    row(42, "corto", "siguiente",    "anterior")
-    row(54, "doble", "VELOCIDAD",    "reset viaje")
-    row(66, "largo", "AP / log SD",  "waypoint GPS")
-    row(78, "extra", "(nada)",        "deep sleep")
+    row(40, "corto", "contextual*",  "waypoint")
+    row(52, "doble", "siguiente",    "anterior")
+    row(64, "largo", "ir CARRERA",   "ir CONFIG")
+    row(76, "extra", "reset local",  "deep sleep")
 
-    tft.hline(0, 92, tft.width, D)
+    tft.hline(0, 88, tft.width, D)
 
     # Footer hints
-    tft.text("AP: ir a CONFIG -> BTN0 largo 1.2-2.2s", 4, 98, GRAY)
-    tft.text("Sleep: S3 extra >=2.2s soltar; wake S3", 4, 110, GRAY)
-    tft.text("Auto-sleep: configurar en CONFIGURACION", 4, 122, GRAY)
+    tft.text("*corto: CARRERA=play/pausa CONFIG=AP CARGA=reset"[:39], 4, 92, GRAY)
+    tft.text("Combo S3+BTN0 corto: log SD"[:39], 4, 104, GRAY)
+    tft.text("Combo BTN0+S3 corto: reset Super Mini"[:39], 4, 116, GRAY)
+    tft.text("(repetir combo en <5s para confirmar)"[:39], 4, 128, GRAY)
+    tft.text("Auto-sleep: configurar en CONFIGURACION"[:39], 4, 142, GRAY)
     tft.show()
 
 
@@ -568,35 +646,9 @@ def _draw_battery(tft):
     tft.text(label, 287, 4, color)
 
 
-def _draw_field(tft, idx):
-    if idx == len(FIELDS):
-        _draw_diagnostics(tft, idx)
-        return
-    if idx == len(FIELDS) + 1:
-        _draw_help(tft, idx)
-        return
-    if idx == len(FIELDS) + 2:
-        _draw_configuration(tft, idx)
-        return
-    if idx == len(FIELDS) + 3:
-        _draw_carga(tft, idx)
-        return
-
-    # Layout landscape 320x170 (rotation=1), 3 filas:
-    #  1) estado del link ESP-NOW con el Super Mini
-    #  2) cifra: codigo font40 (izq) + valor font80 (centro) + unidad font40 (der)
-    #  3) estado: LoRa + indice
-    field = FIELDS[idx]
-    group, label, code, unit, fmt, getter = field[:6]
-    secondary = field[6] if len(field) > 6 else None
-    st = _rt.state
-    fresh = _rt.source_fresh()
-    value_str = fmt.format(getter(st)) if fresh else "--"
-    value_color = WHITE if fresh else GRAY
-
-    tft.fill(BLACK)
-
-    # --- fila 1: estado del link ESP-NOW ---
+def _draw_status_row(tft):
+    """Fila 1, comun a todas las paginas de valor: estado del link
+    ESP-NOW con el Super Mini, SD, GPS y bateria del T190."""
     link_text, link_color = _espnow_link_text()
     tft.text(link_text[:19], 2, 4, link_color)
     log_text, log_color = _sd_log_status()
@@ -605,36 +657,11 @@ def _draw_field(tft, idx):
     tft.text(gps_text, 210, 4, gps_color)
     _draw_battery(tft)
 
-    # --- fila 2: codigo (font40) + valor (font80) + unidad (font40) ---
-    # El valor se centra en el hueco libre entre codigo y unidad (no en el
-    # ancho total): "Wh/km"/"km/h" de unidad o 5 digitos de distancia
-    # pueden ser mas anchos que el margen fijo y pisar al valor centrado
-    # a lo bestia contra el ancho completo.
-    code_w = seven_seg.text_width(SEG40, code)
-    unit_w = seven_seg.text_width(SEG40, unit)
-    value_w = seven_seg.text_width(SEG80, value_str)
-    gap = 8
-    left_bound = 8 + code_w + gap
-    right_bound = tft.width - 8 - unit_w - gap
-    free_w = right_bound - left_bound
-    # Centrar en el hueco libre, incluso si el valor es mas ancho que el
-    # hueco (caso raro: unidad larga + valor largo a la vez) -- la unidad
-    # se dibuja despues y queda arriba en el solape, el codigo es lo unico
-    # que puede perder un par de px contra el borde del valor.
-    value_x = left_bound + (free_w - value_w) // 2
 
-    seven_seg.draw_text(tft, SEG40, code, 8, 60, WHITE, BLACK)
-    seven_seg.draw_text(tft, SEG80, value_str, value_x, 24, value_color, BLACK)
-    seven_seg.draw_text(tft, SEG40, unit, tft.width - unit_w - 8, 60, WHITE, BLACK)
-    tft.text("{} / {}".format(group, label), 8, 104, WHITE)
-    if secondary is not None:
-        sec_label, sec_fmt, sec_getter = secondary
-        sec_val = sec_fmt.format(sec_getter(st))
-        sec_text = ("{}: {}".format(sec_label, sec_val) if sec_label
-                    else sec_val)
-        tft.text(sec_text[:36], 8, 112, GRAY)
-
-    # --- fila 3: LoRa + indice ---
+def _draw_footer_row(tft, idx):
+    """Fila 3, comun a todas las paginas de valor: estado LoRa/fuente,
+    indice de pagina, y avisos (sleep inminente / toast)."""
+    st = _rt.state
     tft.hline(0, 120, tft.width, rgb565(50, 50, 50))
     src = "SRC:OK" if _rt.source_fresh() else "SRC:STALE"
     validity = "V{}I{}".format(
@@ -656,7 +683,191 @@ def _draw_field(tft, idx):
         toast_text = _toast_line()
         if toast_text is not None:
             tft.text(toast_text[:38], 2, 144, GREEN)
+
+
+def _draw_big_value_page(tft, idx, group, label, code, unit, fmt, getter,
+                          secondary=None):
+    """Layout landscape 320x170 (rotation=1) comun a la mayoria de las
+    paginas: fila de estado, cifra grande (codigo font40 + valor font80 +
+    unidad font40) con su label debajo, y fila de pie. Reemplaza al viejo
+    _draw_field generico que leia de FIELDS[idx] -- ahora cada pagina pasa
+    sus propios group/label/code/unit/fmt/getter."""
+    st = _rt.state
+    fresh = _rt.source_fresh()
+    value_str = fmt.format(getter(st)) if fresh else "--"
+    value_color = WHITE if fresh else GRAY
+
+    tft.fill(BLACK)
+    _draw_status_row(tft)
+
+    # El valor se centra en el hueco libre entre codigo y unidad (no en el
+    # ancho total): "Wh/km"/"km/h" de unidad o 5 digitos de distancia
+    # pueden ser mas anchos que el margen fijo y pisar al valor centrado
+    # a lo bestia contra el ancho completo.
+    code_w = seven_seg.text_width(SEG40, code)
+    unit_w = seven_seg.text_width(SEG40, unit)
+    value_w = seven_seg.text_width(SEG80, value_str)
+    gap = 8
+    left_bound = 8 + code_w + gap
+    right_bound = tft.width - 8 - unit_w - gap
+    free_w = right_bound - left_bound
+    value_x = left_bound + (free_w - value_w) // 2
+
+    seven_seg.draw_text(tft, SEG40, code, 8, 60, WHITE, BLACK)
+    seven_seg.draw_text(tft, SEG80, value_str, value_x, 24, value_color, BLACK)
+    seven_seg.draw_text(tft, SEG40, unit, tft.width - unit_w - 8, 60, WHITE, BLACK)
+    tft.text("{} / {}".format(group, label), 8, 104, WHITE)
+    if secondary is not None:
+        sec_label, sec_fmt, sec_getter = secondary
+        sec_val = sec_fmt.format(sec_getter(st))
+        sec_text = ("{}: {}".format(sec_label, sec_val) if sec_label
+                    else sec_val)
+        tft.text(sec_text[:36], 8, 112, GRAY)
+
+    _draw_footer_row(tft, idx)
     tft.show()
+
+
+def _draw_carrera(tft, idx):
+    """Pagina 0 / home: potencia objetivo vs. potencia actual (el dato
+    central del proyecto, ver docs/ARQUITECTURA_TELEMETRIA_ECOYPF.md §0) +
+    reloj de carrera. BTN0 corto aca inicia/pausa el reloj (_on_race_toggle)."""
+    st = _rt.state
+    pa = st.p_avg5s
+    target = _power_target_w()
+    target_str = "{:.0f}".format(target) if target is not None else "--"
+    value_color = GRAY if target is None else (GREEN if pa <= target else RED)
+
+    tft.fill(BLACK)
+    _draw_status_row(tft)
+
+    code_w = seven_seg.text_width(SEG40, "OBJ")
+    unit_w = seven_seg.text_width(SEG40, "W")
+    value_w = seven_seg.text_width(SEG80, target_str)
+    gap = 8
+    left_bound = 8 + code_w + gap
+    right_bound = tft.width - 8 - unit_w - gap
+    free_w = right_bound - left_bound
+    value_x = left_bound + (free_w - value_w) // 2
+
+    seven_seg.draw_text(tft, SEG40, "OBJ", 8, 60, WHITE, BLACK)
+    seven_seg.draw_text(tft, SEG80, target_str, value_x, 24, value_color, BLACK)
+    seven_seg.draw_text(tft, SEG40, "W", tft.width - unit_w - 8, 60, WHITE, BLACK)
+    tft.text("CARRERA / POTENCIA OBJETIVO", 8, 104, WHITE)
+
+    state_label = {
+        "idle": "LISTO", "running": "EN CARRERA",
+        "paused": "PAUSA", "finished": "FINALIZADA",
+    }.get(_settings.race_state if _settings is not None else "idle", "LISTO")
+    elapsed = _settings.race_elapsed_s() if _settings is not None else 0.0
+    remaining = (_settings.race_remaining_s() if _settings is not None
+                 else RACE_DURATION_S)
+    tft.text("{} T:{} R:{} PA:{:.0f}W".format(
+        state_label, _format_mmss(elapsed), _format_mmss(remaining), pa
+    )[:36], 8, 112, GRAY)
+
+    _draw_footer_row(tft, idx)
+    tft.show()
+
+
+def _draw_ruta(tft, idx):
+    _draw_big_value_page(
+        tft, idx, "RUTA", "VELOCIDAD", "SPD", "km/h", "{:.1f}",
+        lambda s: s.speed_kmh,
+        secondary=("", "{}", lambda s: "Wh/km:{:.1f}  SAT:{}".format(
+            _trip_whkm_avg(), _gps.satellites if _gps is not None else "--")))
+
+
+def _draw_consumo(tft, idx):
+    _draw_big_value_page(
+        tft, idx, "CONSUMO", "POT INSTANT", "PI", "W", "{:.0f}",
+        lambda s: s.p_inst,
+        secondary=("I", "{:.2f}A", lambda s: s.i_bat))
+
+
+def _draw_eficiencia(tft, idx):
+    _draw_big_value_page(
+        tft, idx, "EFICIENCIA", "Wh/km PROM", "WA", "Wh/km", "{:.1f}",
+        lambda s: _trip_whkm_avg(),
+        secondary=("WI", "{:.1f}", lambda s: s.whkm_inst))
+
+
+def _draw_viaje(tft, idx):
+    _draw_big_value_page(
+        tft, idx, "VIAJE", "DISTANCIA", "DST", "m", "{:.0f}",
+        lambda s: _settings.trip_distance_m if _settings else 0.0,
+        secondary=("Pot.prom 5s", "{:.0f}W", lambda s: s.p_avg5s))
+
+
+def _draw_baterias(tft, idx):
+    tft.fill(BLACK)
+    _draw_status_row(tft)
+    tft.text("BATERIAS  {}/{}".format(idx + 1, _page_count()), 8, 20, WHITE)
+    tft.hline(0, 34, tft.width, rgb565(70, 80, 90))
+    st = _rt.state
+    if not _rt.source_fresh():
+        tft.text("Sin telemetria fresca", 8, 50, RED)
+    else:
+        tft.text("B1: {:.2f} V".format(st.v_b1), 8, 42, WHITE)
+        tft.text("B2: {:.2f} V".format(st.v_b2), 8, 58, WHITE)
+        tft.text("B3: {:.2f} V".format(st.v_b3), 8, 74, WHITE)
+        tft.text("B4: {:.2f} V".format(st.v_b4), 8, 90, WHITE)
+        tft.text("VBATS TOTAL: {:.2f} V".format(st.v_bats), 8, 106, GREEN)
+    _draw_footer_row(tft, idx)
+    tft.show()
+
+
+def _draw_energia(tft, idx):
+    tft.fill(BLACK)
+    _draw_status_row(tft)
+    tft.text("ENERGIA  {}/{}".format(idx + 1, _page_count()), 8, 20, WHITE)
+    tft.hline(0, 34, tft.width, rgb565(70, 80, 90))
+    if _settings is None:
+        tft.text("Sin datos", 8, 50, RED)
+    else:
+        peukert_rem = _settings.energy_remaining_peukert_wh
+        linear_rem = _settings.battery_remaining_wh
+        percent = _settings.battery_percent
+        rem_text = "{:.0f} Wh".format(peukert_rem) if peukert_rem is not None else "--"
+        tft.text("RESTANTE: {}".format(rem_text), 8, 42,
+                  GREEN if peukert_rem is not None else GRAY)
+        tft.text("Usados: {:.0f} Wh".format(_settings.battery_used_wh), 8, 62, WHITE)
+        lin_text = "{:.0f} Wh".format(linear_rem) if linear_rem is not None else "--"
+        tft.text("Lineal: {}  PACK: {}%".format(
+            lin_text, percent if percent is not None else "--"), 8, 82, GRAY)
+    _draw_footer_row(tft, idx)
+    tft.show()
+
+
+def _draw_gps(tft, idx):
+    tft.fill(BLACK)
+    _draw_status_row(tft)
+    tft.text("GPS  {}/{}".format(idx + 1, _page_count()), 8, 20, WHITE)
+    tft.hline(0, 34, tft.width, rgb565(70, 80, 90))
+    if _gps is None:
+        tft.text("GPS no disponible", 8, 50, RED)
+    else:
+        fix = _gps.latest_fix()
+        if fix is None:
+            tft.text("Sin fix. Sats: {}".format(_gps.satellites), 8, 42, GRAY)
+        else:
+            tft.text("Fix: {:.5f}, {:.5f}".format(
+                fix["latitude"], fix["longitude"]), 8, 42, GREEN)
+            tft.text("Sats: {}".format(fix["satellites"]), 8, 58, WHITE)
+        if _lap_waypoint is None:
+            tft.text("Waypoint: no capturado (S3 corto)", 8, 74, GRAY)
+        else:
+            tft.text("Waypoint: {:.5f}, {:.5f}".format(*_lap_waypoint), 8, 74, WHITE)
+        lap_text = "VUELTAS: {}".format(_lap_count)
+        if _last_lap_time_s is not None:
+            lap_text += "  ULTIMA: {}".format(_format_mmss(_last_lap_time_s))
+        tft.text(lap_text, 8, 90, GREEN if _lap_count else GRAY)
+    _draw_footer_row(tft, idx)
+    tft.show()
+
+
+def _draw_field(tft, idx):
+    PAGES[idx]["draw"](tft, idx)
 
 
 async def ui_task(tft):
@@ -706,6 +917,7 @@ async def gps_task():
         if _gps is not None:
             if _gps.poll():
                 _dirty = True
+                _check_lap_crossing()
             update_count = _gps.time_update_count
             now = time.ticks_ms()
             if (update_count != _gps_time_update_seen and
@@ -804,7 +1016,13 @@ async def idle_sleep_task():
                 print("[sleep] telemetria del Super Mini recuperada; "
                       "temporizador de ausencia cancelado")
             lost_since_ms = None
-            if abs(_rt.state.speed_kmh) <= IDLE_SPEED_THRESHOLD_KMH:
+            # Con la carrera en curso no hay que dejar que el display se
+            # apague por inactividad (puede haber paradas en pista/boxes
+            # sin que eso signifique "abandonado") -- la rama de "Super
+            # Mini ausente" arriba sigue activa igual.
+            race_running = (
+                _settings is not None and _settings.race_state == "running")
+            if abs(_rt.state.speed_kmh) <= IDLE_SPEED_THRESHOLD_KMH and not race_running:
                 if idle_since_ms is None:
                     idle_since_ms = now
                     print("[sleep] velocidad estacionaria; comienza temporizador de {} min".format(
@@ -820,8 +1038,12 @@ async def idle_sleep_task():
                 _sleep_warn_reason = "idle"
             else:
                 if idle_since_ms is not None:
-                    print("[sleep] movimiento detectado ({:.2f} km/h); temporizador cancelado".format(
-                        _rt.state.speed_kmh))
+                    if race_running:
+                        print("[sleep] carrera en curso; temporizador de "
+                              "inactividad cancelado")
+                    else:
+                        print("[sleep] movimiento detectado ({:.2f} km/h); temporizador cancelado".format(
+                            _rt.state.speed_kmh))
                 idle_since_ms = None
                 _sleep_warn_s = None
                 _sleep_warn_reason = None
@@ -873,13 +1095,14 @@ async def sd_log_task():
 def _apply_configuration(b_supermini_factors, ads_mode, capacity_wh, mark_charged,
                          source_boot, source_wh, meters_per_pulse,
                          debounce_us, max_speed_kmh, sleep_timeout_min,
-                         precharge_wh=0.0):
+                         precharge_wh=0.0, peukert_n=1.0, peukert_i_ref=0.0):
     global _dirty, _supermini_config_error, _supermini_config_error_revision
     global IDLE_SLEEP_TIMEOUT_MS
     _settings.update_configuration(
         b_supermini_factors, ads_mode, capacity_wh, meters_per_pulse, debounce_us,
         max_speed_kmh, sleep_timeout_min, mark_charged,
-        source_boot=source_boot, source_wh=source_wh, precharge_wh=precharge_wh)
+        source_boot=source_boot, source_wh=source_wh, precharge_wh=precharge_wh,
+        peukert_n=peukert_n, peukert_i_ref=peukert_i_ref)
     IDLE_SLEEP_TIMEOUT_MS = sleep_timeout_min * 60 * 1000
     _supermini_config_error = None
     _supermini_config_error_revision = None
@@ -931,6 +1154,40 @@ def _on_supermini_config_ack(revision, accepted):
         _supermini_config_error_revision = revision
         print("[config] Super Mini rechazó ajustes, ID={}".format(revision))
     _dirty = True
+
+
+def _on_supermini_reset_ack(request_id, accepted):
+    """Callback de EspNowLink para el canal RST/RSTA/RSTN (ver Fase 5):
+    confirma o rechaza el pedido de reset remoto disparado por el combo
+    BTN0 sostenido + S3 corto (_on_remote_reset_request)."""
+    global _reset_ack_status, _dirty
+    if request_id != _reset_request_id:
+        print("[reset] ACK de Super Mini ignorado para ID", request_id)
+        return
+    if accepted:
+        _reset_ack_status = "ok"
+        _show_toast("Reset Super Mini OK")
+        print("[reset] Super Mini confirmo el reset, ID={}".format(request_id))
+    else:
+        _reset_ack_status = "rejected"
+        _show_toast("Reset Super Mini RECHAZADO")
+        print("[reset] Super Mini rechazo el reset, ID={}".format(request_id))
+    _dirty = True
+
+
+async def remote_reset_watchdog_task(interval_ms=500):
+    """Si el pedido de reset remoto queda "pending" mas de
+    RESET_ACK_TIMEOUT_MS sin ACK/NACK del Super Mini (apagado, fuera de
+    rango), avisa por toast -- la accion en si es idempotente, reintentar
+    el combo no corrompe nada."""
+    global _reset_ack_status, _dirty
+    while True:
+        if (_reset_ack_status == "pending" and
+                time.ticks_diff(time.ticks_ms(), _reset_ack_deadline_ms) >= 0):
+            _reset_ack_status = "timeout"
+            _show_toast("Reset Super Mini: SIN CONFIRMACION")
+            _dirty = True
+        await asyncio.sleep_ms(interval_ms)
 
 
 async def supermini_config_task(interval_ms=2500):
@@ -990,7 +1247,7 @@ async def config_ap_task():
                 await server.stop()
                 _CONFIG_AP_RUNNING = False
                 _CONFIG_AP_STOP_REQUESTED = False
-                _field_idx = 0
+                _field_idx = _PAGE_INDEX["CARRERA"]
                 _dirty = True
         await asyncio.sleep_ms(100)
 
@@ -1021,11 +1278,11 @@ def _on_next():
 def _on_home():
     global _field_idx, _dirty, _CONFIG_AP_REQUESTED
     global _CONFIG_AP_STOP_REQUESTED
-    _field_idx = 0
+    _field_idx = _PAGE_INDEX["CARRERA"]
     if _CONFIG_AP_RUNNING or _CONFIG_AP_REQUESTED:
         _CONFIG_AP_REQUESTED = False
         _CONFIG_AP_STOP_REQUESTED = True
-        print("[config] cerrando AP sin guardar; regreso a VELOCIDAD")
+        print("[config] cerrando AP sin guardar; regreso a CARRERA")
     _dirty = True
 
 
@@ -1035,6 +1292,12 @@ def _on_prev():
         _on_home()
         return
     _field_idx = (_field_idx - 1) % _page_count()
+    _dirty = True
+
+
+def _on_go_config():
+    global _field_idx, _dirty
+    _field_idx = _PAGE_INDEX["CONFIG"]
     _dirty = True
 
 
@@ -1067,23 +1330,9 @@ def _on_deep_sleep():
 
 
 def _on_log_toggle():
-    global _CONFIG_AP_REQUESTED, _CONFIG_AP_STOP_REQUESTED
-    global _charge_wh_accum, _charge_session_active, _dirty
-    if _field_idx == len(FIELDS) + 3:
-        _charge_wh_accum = 0.0
-        _charge_session_active = False
-        _dirty = True
-        print("[carga] sesion reiniciada (Wh+ = 0)")
-        return
-    if _field_idx == len(FIELDS) + 2:
-        if _CONFIG_AP_RUNNING or _CONFIG_AP_REQUESTED:
-            _CONFIG_AP_REQUESTED = False
-            _CONFIG_AP_STOP_REQUESTED = True
-            print("[config] cerrando AP sin guardar")
-        else:
-            _CONFIG_AP_REQUESTED = True
-            print("[config] iniciando AP; conecta el teléfono a", AP_SSID)
-        return
+    """Alternar log SD -- ahora disparado por el combo S3 sostenido +
+    BTN0 corto (antes era BTN0 largo global; ese gesto ahora es "ir a
+    CARRERA", ver _on_home)."""
     if _sd_logger is None or not _sd_logger.ready:
         detail = _sd_error if _sd_logger is None else _sd_logger.error
         print("[SD] no se puede cambiar el registro:", detail or "no disponible")
@@ -1092,6 +1341,37 @@ def _on_log_toggle():
         log_stop()
     else:
         log_start()
+
+
+def _on_config_ap_toggle():
+    """BTN0 corto en la pagina CONFIGURACION: abre/cierra el AP de
+    configuracion (antes era BTN0 largo global en esa pantalla)."""
+    global _CONFIG_AP_REQUESTED, _CONFIG_AP_STOP_REQUESTED
+    if _CONFIG_AP_RUNNING or _CONFIG_AP_REQUESTED:
+        _CONFIG_AP_REQUESTED = False
+        _CONFIG_AP_STOP_REQUESTED = True
+        print("[config] cerrando AP sin guardar")
+    else:
+        _CONFIG_AP_REQUESTED = True
+        print("[config] iniciando AP; conecta el teléfono a", AP_SSID)
+
+
+def _on_charge_session_reset():
+    """BTN0 corto en la pagina CARGA: reinicia la sesion de carga (antes
+    era BTN0 largo en esa pantalla)."""
+    global _charge_wh_accum, _charge_session_active, _dirty
+    _charge_wh_accum = 0.0
+    _charge_session_active = False
+    _dirty = True
+    print("[carga] sesion reiniciada (Wh+ = 0)")
+
+
+def _on_btn0_short_contextual():
+    """BTN0 corto: contextual segun la pagina activa (ver PAGES,
+    campo opcional "on_btn0_short"); sin accion si la pagina no define una."""
+    action = PAGES[_field_idx].get("on_btn0_short")
+    if action is not None:
+        action()
 
 
 def _enter_deep_sleep():
@@ -1120,8 +1400,11 @@ def _enter_deep_sleep():
     machine.deepsleep()
 
 
-def _on_start_waypoint():
-    global _gps_start, _dirty
+def _on_capture_waypoint():
+    """S3 corto: captura el waypoint de largada/llegada (antes era S3
+    largo; el conteo de vueltas usa este punto, ver _check_lap_crossing)."""
+    global _lap_waypoint, _lap_count, _last_lap_time_s, _lap_start_ms
+    global _lap_last_cross_ms, _dirty
     if _gps is None:
         print("[GPS] no disponible; revisar UART y alimentacion VEXT")
         _show_toast("Waypoint: GPS no disponible")
@@ -1131,12 +1414,122 @@ def _on_start_waypoint():
         print("[GPS] sin fix reciente; waypoint no capturado")
         _show_toast("Waypoint: sin fix GPS")
         return
-    _gps_start = (fix["latitude"], fix["longitude"])
-    print("[GPS] waypoint Start: lat={:.6f} lon={:.6f} sats={}".format(
-        _gps_start[0], _gps_start[1], fix["satellites"]))
+    _lap_waypoint = (fix["latitude"], fix["longitude"])
+    now = time.ticks_ms()
+    _lap_count = 0
+    _last_lap_time_s = None
+    _lap_start_ms = now
+    _lap_last_cross_ms = now
+    print("[GPS] waypoint largada/llegada: lat={:.6f} lon={:.6f} sats={}".format(
+        _lap_waypoint[0], _lap_waypoint[1], fix["satellites"]))
     _show_toast("Waypoint OK sat{}: {:.5f},{:.5f}".format(
-        fix["satellites"], _gps_start[0], _gps_start[1]))
+        fix["satellites"], _lap_waypoint[0], _lap_waypoint[1]))
     _dirty = True
+
+
+def _on_race_toggle():
+    """BTN0 corto en la pagina CARRERA: inicia, pausa o reanuda el reloj
+    de carrera (ver T190Settings.race_* y docs/ARQUITECTURA_TELEMETRIA_
+    ECOYPF.md §0)."""
+    global _dirty
+    if _settings is None:
+        return
+    state = _settings.race_state
+    if state in ("idle", "finished"):
+        _settings.race_start()
+        _show_toast("CARRERA INICIADA ({})".format(_format_mmss(RACE_DURATION_S)))
+    elif state == "running":
+        _settings.race_pause()
+        _show_toast("CARRERA PAUSADA")
+    elif state == "paused":
+        _settings.race_resume()
+        _show_toast("CARRERA REANUDADA")
+    _dirty = True
+
+
+def _on_btn0_extra_reset():
+    """BTN0 extra-largo: reset local completo -- viaje (ya existia, ver
+    _on_reset_trip) + reloj de carrera + acumulador Peukert."""
+    global _dirty
+    _on_reset_trip()
+    if _settings is not None:
+        _settings.race_reset()
+        _settings.reset_effective_energy()
+    _show_toast("Reset local: viaje, carrera y Peukert en 0")
+    _dirty = True
+
+
+def _on_remote_reset_request():
+    """Combo BTN0 sostenido + S3 corto: pide al Super Mini que resetee sus
+    acumuladores de vida entera (wh_total/dist_m/pulsos en trip.json) via
+    ESP-NOW (canal RST/RSTA/RSTN, analogo a CFG/CFGA/CFGN). Accion
+    destructiva e irreversible -> interlock de doble confirmacion: el
+    primer combo solo "arma" un pedido que vence en
+    REMOTE_RESET_CONFIRM_WINDOW_MS; hay que repetir el combo dentro de esa
+    ventana para que se envie de verdad."""
+    global _remote_reset_armed_until_ms, _reset_request_id, _reset_ack_status
+    global _reset_ack_deadline_ms, _dirty
+    now = time.ticks_ms()
+    armed = (_remote_reset_armed_until_ms != 0 and
+             time.ticks_diff(now, _remote_reset_armed_until_ms) <= 0)
+    if not armed:
+        _remote_reset_armed_until_ms = time.ticks_add(
+            now, REMOTE_RESET_CONFIRM_WINDOW_MS)
+        _show_toast("RESET SUPER MINI: repetir combo en 5s para confirmar")
+        _dirty = True
+        return
+    _remote_reset_armed_until_ms = 0
+    if _en is None or not _en.paired:
+        _show_toast("Reset: Super Mini no emparejado")
+        _dirty = True
+        return
+    _reset_request_id = (_reset_request_id + 1) & 0xFFFFFFFF
+    if _en.send_reset_command(_reset_request_id):
+        _reset_ack_status = "pending"
+        _reset_ack_deadline_ms = time.ticks_add(now, RESET_ACK_TIMEOUT_MS)
+        _show_toast("Reset enviado, esperando confirmacion...")
+    else:
+        _reset_ack_status = "failed"
+        _show_toast("Reset: fallo el envio ESP-NOW")
+    _dirty = True
+
+
+async def race_clock_task(interval_ms=1000):
+    """Si la carrera esta RUNNING y se agotaron los 80 minutos, pasa a
+    FINISHED automaticamente (ver T190Settings.race_finish)."""
+    global _dirty
+    while True:
+        if (_settings is not None and _settings.race_state == "running"
+                and _settings.race_remaining_s() <= 0):
+            _settings.race_finish()
+            _show_toast("CARRERA FINALIZADA")
+            _dirty = True
+        await asyncio.sleep_ms(interval_ms)
+
+
+# ── Paginas: construidas aca (no antes) porque la lista necesita que las
+# funciones _draw_* y los handlers on_btn0_short ya esten definidos --
+# ver nota al principio del archivo. _page_count()/_page_label()/
+# _draw_field() (definidas mas arriba) solo leen PAGES/_PAGE_INDEX en el
+# momento en que se llaman, asi que el orden de definicion no importa ahi.
+PAGES = [
+    {"key": "CARRERA", "label": "CARRERA", "draw": _draw_carrera,
+     "on_btn0_short": _on_race_toggle},
+    {"key": "RUTA", "label": "RUTA", "draw": _draw_ruta},
+    {"key": "CONSUMO", "label": "CONSUMO", "draw": _draw_consumo},
+    {"key": "EFICIENCIA", "label": "EFICIENCIA", "draw": _draw_eficiencia},
+    {"key": "BATERIAS", "label": "BATERIAS", "draw": _draw_baterias},
+    {"key": "ENERGIA", "label": "ENERGIA", "draw": _draw_energia},
+    {"key": "VIAJE", "label": "VIAJE", "draw": _draw_viaje},
+    {"key": "GPS", "label": "GPS", "draw": _draw_gps},
+    {"key": "DIAGNOSTICO", "label": "DIAGNOSTICO", "draw": _draw_diagnostics},
+    {"key": "AYUDA", "label": "AYUDA BOTONES", "draw": _draw_help},
+    {"key": "CONFIG", "label": "CONFIGURACION", "draw": _draw_configuration,
+     "on_btn0_short": _on_config_ap_toggle},
+    {"key": "CARGA", "label": "CARGA", "draw": _draw_carga,
+     "on_btn0_short": _on_charge_session_reset},
+]
+_PAGE_INDEX = {p["key"]: i for i, p in enumerate(PAGES)}
 
 
 # ── Arranque asyncio (corre dentro del thread de fondo) ─────────────────────
@@ -1179,30 +1572,44 @@ async def _main_async():
                     _rt.pack_voltage_ratio)
                 _settings.note_source_distance(
                     _rt.state.source_boot, _rt.state.dist_m)
+                _settings.note_effective_energy(
+                    _rt.state.p_inst, _rt.state.i_bat)
             except (OSError, ValueError) as exc:
                 print("[energy] no se pudo guardar el estado del pack:", exc)
         return accepted
 
-    _en = make_espnow(on_telemetry, _on_supermini_config_ack)
+    _en = make_espnow(
+        on_telemetry, _on_supermini_config_ack, _on_supermini_reset_ack)
 
-    # S3 (GPIO21): short = anterior, double = reset, long = waypoint GPS,
-    # extra (>=2.2s) = deep sleep; la accion se ejecuta al soltar el boton.
+    # S3 (GPIO21): corto = capturar waypoint, doble = anterior, largo = ir a
+    # CONFIGURACION, extra (>=2.2s) = deep sleep, combo (con BTN0 sostenido)
+    # = pedir reset remoto del Super Mini. La accion se ejecuta al soltar.
     irq_trigger = Pin.IRQ_FALLING | Pin.IRQ_RISING
     page_btn = InterruptPageButton(
         Pin(HW.PAGE_BTN_PIN, Pin.IN, Pin.PULL_UP),
-        short=_with_activity(_on_prev), double=_with_activity(_on_reset_trip),
-        long=_with_activity(_on_start_waypoint),
-        extra=_with_activity(_on_deep_sleep), label="S3",
-        irq_trigger=irq_trigger, debounce_ms=25,
+        short=_with_activity(_on_capture_waypoint),
+        double=_with_activity(_on_prev),
+        long=_with_activity(_on_go_config),
+        extra=_with_activity(_on_deep_sleep),
+        combo=_with_activity(_on_remote_reset_request),
+        label="S3", irq_trigger=irq_trigger, debounce_ms=25,
     )
-    # BTN0: short avanza; double vuelve a VELOCIDAD; long gestiona el AP en
-    # CONFIGURACION o alterna el log SD en las demas pantallas.
+    # BTN0: corto = contextual (ver PAGES/on_btn0_short), doble = siguiente,
+    # largo = ir a CARRERA (home), extra (>=2.2s) = reset local, combo (con
+    # S3 sostenido) = alternar log SD.
     btn0 = InterruptPageButton(
         Pin(HW.BTN0_PIN, Pin.IN, Pin.PULL_UP),
-        short=_with_activity(_on_next), double=_with_activity(_on_home),
-        long=_with_activity(_on_log_toggle), label="BTN0",
-        irq_trigger=irq_trigger, debounce_ms=25,
+        short=_with_activity(_on_btn0_short_contextual),
+        double=_with_activity(_on_next),
+        long=_with_activity(_on_home),
+        extra=_with_activity(_on_btn0_extra_reset),
+        combo=_with_activity(_on_log_toggle),
+        label="BTN0", irq_trigger=irq_trigger, debounce_ms=25,
     )
+    # Wiring cruzado para que cada boton sepa si el otro esta sostenido --
+    # sin esto, "combo" nunca dispara (ver buttons.py).
+    page_btn.other = btn0
+    btn0.other = page_btn
     _dirty = True
     tasks = [
         asyncio.create_task(_rt.lora_task()),
@@ -1217,6 +1624,8 @@ async def _main_async():
     tasks.append(asyncio.create_task(idle_sleep_task()))
     tasks.append(asyncio.create_task(sd_log_task()))
     tasks.append(asyncio.create_task(charge_monitor_task()))
+    tasks.append(asyncio.create_task(race_clock_task()))
+    tasks.append(asyncio.create_task(remote_reset_watchdog_task()))
 
     if _en is not None:
         tasks.append(asyncio.create_task(_en.listen_task()))
@@ -1314,19 +1723,21 @@ def stop(wait_ms=0):
 
 
 def next_field():
-    """Avanza a la siguiente pantalla (equivalente a BTN0 corto)."""
+    """Avanza a la siguiente pantalla (equivalente a BTN0 doble)."""
     _on_next()
     print("[main] campo ->", _page_label(_field_idx))
 
 
 def prev_field():
-    """Retrocede a la pantalla anterior (equivalente a S3 corto)."""
+    """Retrocede a la pantalla anterior (equivalente a S3 doble)."""
     _on_prev()
     print("[main] campo ->", _page_label(_field_idx))
 
 
 def reset_trip():
-    """Resetea distancia y Wh de viaje (equivalente al reset de boton)."""
+    """Resetea distancia y Wh de viaje (solo esto -- no toca el reloj de
+    carrera ni Peukert; para el reset completo ver _on_btn0_extra_reset,
+    equivalente a BTN0 extra-largo)."""
     _on_reset_trip()
 
 
@@ -1363,22 +1774,27 @@ def status():
         print("[main] aun no inicializado")
         return
     st = _rt.state
-    if _field_idx == len(FIELDS):
+    page = PAGES[_field_idx]
+    if page["key"] == "DIAGNOSTICO":
         page_text, value_text = "DIAGNOSTICO", "--"
-    elif _field_idx == len(FIELDS) + 2:
+    elif page["key"] == "CONFIG":
         page_text, value_text = "CONFIGURACION", (
             "AP activo" if _CONFIG_AP_RUNNING else "AP apagado")
-    elif _field_idx == len(FIELDS) + 1:
-        page_text, value_text = "AYUDA BOTONES", "BTN0 / B21"
-    elif _field_idx == len(FIELDS) + 3:
-        st = _rt.state
+    elif page["key"] == "AYUDA":
+        page_text, value_text = "AYUDA BOTONES", "BTN0 / S3"
+    elif page["key"] == "CARGA":
         page_text = "CARGA"
         value_text = "I={:.2f}A Wh+={:.1f}".format(
             st.i_bat,
             (_settings.precharge_wh if _settings else 0.0) + _charge_wh_accum)
+    elif page["key"] == "CARRERA":
+        page_text = "CARRERA"
+        target = _power_target_w()
+        value_text = "{} PA={:.0f}W obj={}".format(
+            _settings.race_state if _settings else "?", st.p_avg5s,
+            "{:.0f}W".format(target) if target is not None else "--")
     else:
-        group, label, code, unit, fmt, getter = FIELDS[_field_idx][:6]
-        page_text, value_text = "{} / {}".format(group, label), fmt.format(getter(st))
+        page_text, value_text = page["label"], "(ver pantalla)"
     battery_text = "n/a" if _battery_voltage is None else (
         "{:.2f}V/{}% ADC={} pin={:.3f}V {}".format(
             _battery_voltage, _battery_percent, _battery_adc_raw,
@@ -1386,10 +1802,14 @@ def status():
     gps_fix = _gps.latest_fix() if _gps is not None else None
     gps_text = "sin fix" if gps_fix is None else "{:.6f},{:.6f}".format(
         gps_fix["latitude"], gps_fix["longitude"])
+    race_text = "n/a" if _settings is None else "{} T={} R={}".format(
+        _settings.race_state, _format_mmss(_settings.race_elapsed_s()),
+        _format_mmss(_settings.race_remaining_s()))
     print("[STATUS] pantalla={}({}) T190_BAT={} GPS={} I={:.2f}A "
           "B1={:.2f} B2={:.2f} B3={:.2f} B4={:.2f} VBATS={:.2f}V "
           "P={:.0f}W PA={:.0f}W V={:.1f}km/h D={:.0f}m "
-          "WI={:.1f} WA={:.1f} WT={:.1f}Wh PACK={}% REM={}/{}Wh "
+          "WI={:.1f} WA={:.1f} WT={:.1f}Wh PACK={}% REM_lin={} REM_peuk={} "
+          "CAP={}Wh RACE={} VUELTAS={} "
           "VF={} AV={} IV={} AGE={}ms LoRaTXlocal={}#{} "
           "ESPNOW={}#{}".format(
         page_text, value_text, battery_text, gps_text,
@@ -1398,7 +1818,9 @@ def status():
         st.whkm_inst, st.whkm_avg, st.wh_total,
         _settings.battery_percent if _settings else None,
         _settings.battery_remaining_wh if _settings else None,
+        _settings.energy_remaining_peukert_wh if _settings else None,
         _settings.battery_capacity_wh if _settings else None,
+        race_text, _lap_count,
         _settings.b_supermini_factors_milli if _settings else None,
         st.adc_valid, st.current_valid, _rt.source_age_ms(),
         st.lora_ok, st.lora_tx_count,
@@ -1507,19 +1929,22 @@ def deep_sleep():
 
 
 def gps_status():
-    """Muestra por REPL el ultimo fix GPS y el waypoint Start capturado."""
+    """Muestra por REPL el ultimo fix GPS y el waypoint de largada/llegada
+    capturado, con el conteo de vueltas."""
     if _gps is None:
         print("[GPS] no inicializado")
         return
     fix = _gps.latest_fix()
     if fix is None:
-        print("[GPS] sin fix reciente; satelites={} bytes_invalidos={}".format(
-            _gps.satellites, _gps.invalid_bytes))
+        print("[GPS] sin fix reciente; satelites={} bytes_invalidos={} "
+              "waypoint={} vueltas={}".format(
+            _gps.satellites, _gps.invalid_bytes, _lap_waypoint, _lap_count))
         return
     print("[GPS] fix lat={:.6f} lon={:.6f} sats={} speed={:.1f}km/h "
-          "bytes_invalidos={} Start={}".format(
+          "bytes_invalidos={} waypoint={} vueltas={} ultima_vuelta={}".format(
         fix["latitude"], fix["longitude"], fix["satellites"],
-        fix["speed_kmh"], _gps.invalid_bytes, _gps_start))
+        fix["speed_kmh"], _gps.invalid_bytes, _lap_waypoint, _lap_count,
+        _format_mmss(_last_lap_time_s) if _last_lap_time_s is not None else "--"))
 
 
 if AUTO_START:

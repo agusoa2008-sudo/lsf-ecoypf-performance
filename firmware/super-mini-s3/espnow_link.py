@@ -32,6 +32,9 @@ TELEMETRY_PREFIX = b"TLM:"
 CONFIG_PREFIX = b"CFG:"
 CONFIG_ACK_PREFIX = b"CFGA:"
 CONFIG_NACK_PREFIX = b"CFGN:"
+RESET_PREFIX = b"RST:"
+RESET_ACK_PREFIX = b"RSTA:"
+RESET_NACK_PREFIX = b"RSTN:"
 
 
 def mac_str(mac):
@@ -60,8 +63,9 @@ def _save_peer(mac):
 
 
 class EspNowLink:
-    def __init__(self, on_configuration=None):
+    def __init__(self, on_configuration=None, on_reset=None):
         self._on_configuration = on_configuration
+        self._on_reset = on_reset
         self._sta = network.WLAN(network.STA_IF)
         self._sta.active(True)
         self._e = espnow.ESPNow()
@@ -126,6 +130,31 @@ class EspNowLink:
                 self._e.send(mac, response + revision.encode())
             except OSError as exc:
                 print("[espnow] no se pudo confirmar configuración:", exc)
+            return
+
+        if (msg.startswith(RESET_PREFIX) and self.paired and
+                mac == self.peer and self._on_reset is not None):
+            request_id = "0"
+            try:
+                payload = msg[len(RESET_PREFIX):].decode()
+                fields = {}
+                for part in payload.split(";"):
+                    key, separator, value = part.partition("=")
+                    if separator and key:
+                        fields[key] = value
+                if fields.get("V") != "1" or "ID" not in fields:
+                    raise ValueError("version o ID de reset invalidos")
+                request_id = fields["ID"]
+                accepted = self._on_reset(int(request_id))
+            except (UnicodeError, ValueError, TypeError, KeyError,
+                    RuntimeError, OSError) as exc:
+                accepted = False
+                print("[espnow] reset remoto rechazado:", exc)
+            response = RESET_ACK_PREFIX if accepted else RESET_NACK_PREFIX
+            try:
+                self._e.send(mac, response + request_id.encode())
+            except OSError as exc:
+                print("[espnow] no se pudo confirmar reset:", exc)
 
     async def pairing_task(self, interval_ms=1000):
         """Mientras no haya peer, broadcastea PAIR_REQ y escucha ACKs. Ya

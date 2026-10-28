@@ -182,3 +182,15 @@ class EspNowLink:
             print("[espnow] send error:", exc)
             self.paired = False   # el peer puede haberse ido; reintentar pairing
             return False
+
+    def send_telemetry_broadcast(self, payload_str):
+        """Difunde el mismo frame TLM: por broadcast, best-effort, para
+        displays secundarios de solo lectura (sin pairing ni CFG/RST --
+        ver docs/ARQUITECTURA_TELEMETRIA_ECOYPF.md). A diferencia del
+        unicast al T190, un broadcast ESP-NOW no tiene ACK de capa Wi-Fi:
+        send() no reintenta ni espera confirmacion, asi que esto nunca
+        bloquea el ciclo de espnow_task ni retrasa el envio al T190."""
+        try:
+            self._e.send(BROADCAST, TELEMETRY_PREFIX + payload_str.encode())
+        except OSError as exc:
+            print("[espnow] broadcast telemetry error:", exc)

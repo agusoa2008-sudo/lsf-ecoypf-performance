@@ -544,16 +544,21 @@ def make_espnow():
 async def espnow_task(interval_ms=ESPNOW_INTERVAL_MS):
     """Manda la telemetria actual al T190 por ESP-NOW (si ya esta
     emparejado) y refleja el estado del link en el status LED (verde/azul
-    alternando -- ver status_led.py: set_espnow_connected)."""
+    alternando -- ver status_led.py: set_espnow_connected). Ademas
+    difunde el mismo frame por broadcast para displays secundarios de
+    solo lectura -- SIEMPRE despues del unicast al T190 y sin condicionar
+    a su resultado, para que un display de backup ausente/fuera de rango
+    nunca retrase ni afecte el envio critico al T190 (el broadcast no
+    bloquea: ver send_telemetry_broadcast en espnow_link.py)."""
     if _en is None or _board is None:
         print("[main] ESP-NOW no inicializado; tarea de envio inactiva")
         return
     seq = 0
     while True:
         st = _board.state
+        seq = (seq % 65535) + 1
+        payload = _build_payload(st, seq)
         if _en.paired:
-            seq = (seq % 65535) + 1
-            payload = _build_payload(st, seq)
             ok = _en.send_telemetry(payload)
             st.espnow_ok = ok
             if ok:
@@ -562,6 +567,7 @@ async def espnow_task(interval_ms=ESPNOW_INTERVAL_MS):
                 st.espnow_tx_fail_count += 1
         else:
             st.espnow_ok = False
+        _en.send_telemetry_broadcast(payload)
         _board._led.set_espnow_connected(_en.paired)
         await asyncio.sleep_ms(interval_ms)
 

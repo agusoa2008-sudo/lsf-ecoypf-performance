@@ -2,3 +2,13 @@ __pycache__/
 *.pyc
 .directory
 .mcp.json
+
+# KiCad: historial local del editor (repo git anidado del plugin de
+# historial) y archivos de bloqueo -- no se versionan.
+**/.history/
+*.lck
+
+# Reportes generados por KiCad (Inspect > Electrical/Design Rules Checker) --
+# se regeneran localmente, versionarlos solo ensucia el diff.
+*ERC.rpt
+*DRC.rpt

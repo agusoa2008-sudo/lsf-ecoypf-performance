@@ -30,8 +30,9 @@ no es el número que el piloto mira en vivo para decidir.
 
 El detalle completo de por qué se mide cada cosa está en
 [`docs/ARQUITECTURA_TELEMETRIA_ECOYPF.md §0`](docs/ARQUITECTURA_TELEMETRIA_ECOYPF.md#0-objetivo-potencia-objetivo-vs-potencia-actual-el-dato-central-del-proyecto).
-**Potencia objetivo todavía no está implementada** en el firmware — falta un reloj de carrera y el
-cálculo de energía restante (ver la tabla de pendientes en ese mismo documento).
+**Potencia objetivo ya está implementada** en el firmware del T190 (pantalla CARRERA: reloj de carrera
++ energía restante con modelo Peukert calibrable, ver [`docs/CALIBRACION_PEUKERT.md`](docs/CALIBRACION_PEUKERT.md)) —
+falta validarla en banco y en pista.
 
 ## Arquitectura: tres nodos
 
@@ -72,6 +73,17 @@ firmware/
 Cada carpeta de firmware tiene su propio `README.md` con el pinout, los archivos principales y cómo
 desplegarlo. El T190 además tiene notas de desarrollo (`CONTINUACION_DESARROLLO.md`) y guías de los
 drivers de pantalla y radio (`ST7789_LCD.md`, `SX1262_LoRa.md`).
+
+## Historia del desarrollo
+
+<p align="center">
+  <img src="docs/Fotos/WhatsApp%20Image%202026-10-17%20at%207.27.15%20PM.jpeg" width="420" alt="Equipo armando la carrocería del auto en el taller">
+  <img src="docs/Fotos/WhatsApp%20Image%202026-10-18%20at%201.13.11%20PM.jpeg" width="420" alt="Componentes de electrónica de a bordo sobre la mesa de trabajo">
+</p>
+
+Instantáneas del taller de La Salle Florida: armado de la carrocería y electrónica de a bordo antes de
+integrarla al auto. Más fotos, videos del proceso y el esquemático de cableado del Super Mini (KiCad)
+en [`docs/Fotos/`](docs/Fotos/) y [`docs/KiCad/`](docs/KiCad/).
 
 ## Nota sobre credenciales
 

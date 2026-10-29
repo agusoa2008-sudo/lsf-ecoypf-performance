@@ -35,6 +35,8 @@ PAIR_ACK_MAGIC = b"T190_PAIR_ACK"    # lo contesta el T190
 TELEMETRY_PREFIX = b"TLM:"
 CONFIG_ACK_PREFIX = b"CFGA:"
 CONFIG_NACK_PREFIX = b"CFGN:"
+RESET_ACK_PREFIX = b"RSTA:"
+RESET_NACK_PREFIX = b"RSTN:"
 
 STALE_MS = 5000   # sin telemetria nueva en este tiempo -> se considera caida
 
@@ -65,11 +67,16 @@ def _save_peer(mac):
 
 
 class EspNowLink:
-    def __init__(self, on_telemetry=None, on_config_ack=None):
+    def __init__(self, on_telemetry=None, on_config_ack=None,
+                 on_reset_ack=None):
         """on_telemetry: callback(payload_str) -- se llama con cada linea
-        de telemetria recibida del Super Mini ya emparejado."""
+        de telemetria recibida del Super Mini ya emparejado. on_reset_ack:
+        callback(request_id, accepted) -- confirmacion/rechazo del canal
+        RST (reset remoto de los acumulados de vida entera del Super
+        Mini, ver _apply_remote_reset en su main.py)."""
         self._on_telemetry = on_telemetry
         self._on_config_ack = on_config_ack
+        self._on_reset_ack = on_reset_ack
         self._sta = network.WLAN(network.STA_IF)
         self._sta.active(True)
         self._e = espnow.ESPNow()
@@ -125,6 +132,20 @@ class EspNowLink:
                 return
             if self._on_config_ack is not None:
                 self._on_config_ack(revision, accepted)
+            return
+
+        if (self.paired and mac == self.peer and
+                (msg.startswith(RESET_ACK_PREFIX) or
+                 msg.startswith(RESET_NACK_PREFIX))):
+            accepted = msg.startswith(RESET_ACK_PREFIX)
+            prefix = RESET_ACK_PREFIX if accepted else RESET_NACK_PREFIX
+            try:
+                request_id = int(msg[len(prefix):].decode())
+            except (UnicodeError, ValueError):
+                print("[espnow] confirmación de reset inválida")
+                return
+            if self._on_reset_ack is not None:
+                self._on_reset_ack(request_id, accepted)
             return
 
         if msg.startswith(PAIR_REQ_MAGIC):
@@ -183,6 +204,19 @@ class EspNowLink:
             return bool(self._e.send(self.peer, payload))
         except OSError as exc:
             print("[espnow] error enviando configuración al Super Mini:", exc)
+            return False
+
+    def send_reset_command(self, request_id):
+        """Pide al Super Mini que resetee sus acumulados de vida entera
+        (ver _apply_remote_reset en su main.py). Analogo a
+        send_configuration/CFG, con su propio canal RST/RSTA/RSTN."""
+        if not self.paired or self.peer is None:
+            return False
+        payload = "RST:V=1;ID={}".format(request_id).encode()
+        try:
+            return bool(self._e.send(self.peer, payload))
+        except OSError as exc:
+            print("[espnow] error enviando reset al Super Mini:", exc)
             return False
 
     async def listen_task(self, poll_ms=50):

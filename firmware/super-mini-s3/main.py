@@ -172,6 +172,15 @@ class PulseCounter:
         period_s = self._last_period_us / 1_000_000.0
         return (self.meters_per_pulse / period_s) * 3.6
 
+    def reset(self):
+        """Pone en cero el conteo de pulsos -- usado por el reset remoto
+        del T190 (ver _apply_remote_reset). No reinicia meters_per_pulse/
+        debounce_us/max_speed_kmh, solo el acumulado."""
+        self._count = 0
+        self._rejected_count = 0
+        self._last_us = None
+        self._last_period_us = 0
+
 
 class SensorBoard:
     def __init__(self):
@@ -476,6 +485,32 @@ def _apply_remote_configuration(payload):
     return True
 
 
+def _apply_remote_reset(request_id):
+    """Pedido de reset remoto del T190 (canal RST, ver espnow_link.py y
+    firmware/t190/main.py: _on_remote_reset_request): pone en cero los
+    acumulados de vida entera (wh_total, dist_m, contador de pulsos) y
+    persiste de inmediato en trip.json -- no espera al proximo deep sleep.
+    Accion destructiva e irreversible, pedida deliberadamente por el
+    equipo (ej. entre heats o al cambiar de bateria)."""
+    if _board is None:
+        raise RuntimeError("placa no inicializada")
+    st = _board.state
+    _board._pulses.reset()
+    st.pulse_count = 0
+    st.pulse_rejected = 0
+    st.dist_m = 0.0
+    st.wh_total = 0.0
+    st.whkm_avg = 0.0
+    st.whkm_inst = 0.0
+    # Critico: sin esto, el proximo reload_config() (ver SensorBoard.
+    # reload_config) recalcula dist_m sumando los pulsos (ya en 0) a esta
+    # base vieja, "resucitando" la distancia anterior.
+    _board._trip_dist_base_m = 0.0
+    trip_store.save(0.0, 0.0)
+    print("[reset] acumulados de vida entera en cero, ID={}".format(request_id))
+    return True
+
+
 def _build_payload(st, seq):
     """Versioned snapshot including sensor validity and the pulse counter."""
     return (
@@ -493,7 +528,9 @@ def _build_payload(st, seq):
 
 def make_espnow():
     try:
-        link = EspNowLink(on_configuration=_apply_remote_configuration)
+        link = EspNowLink(
+            on_configuration=_apply_remote_configuration,
+            on_reset=_apply_remote_reset)
         if link.paired:
             print("[espnow] OK, peer recordado:", mac_str(link.peer))
         else:
@@ -507,16 +544,21 @@ def make_espnow():
 async def espnow_task(interval_ms=ESPNOW_INTERVAL_MS):
     """Manda la telemetria actual al T190 por ESP-NOW (si ya esta
     emparejado) y refleja el estado del link en el status LED (verde/azul
-    alternando -- ver status_led.py: set_espnow_connected)."""
+    alternando -- ver status_led.py: set_espnow_connected). Ademas
+    difunde el mismo frame por broadcast para displays secundarios de
+    solo lectura -- SIEMPRE despues del unicast al T190 y sin condicionar
+    a su resultado, para que un display de backup ausente/fuera de rango
+    nunca retrase ni afecte el envio critico al T190 (el broadcast no
+    bloquea: ver send_telemetry_broadcast en espnow_link.py)."""
     if _en is None or _board is None:
         print("[main] ESP-NOW no inicializado; tarea de envio inactiva")
         return
     seq = 0
     while True:
         st = _board.state
+        seq = (seq % 65535) + 1
+        payload = _build_payload(st, seq)
         if _en.paired:
-            seq = (seq % 65535) + 1
-            payload = _build_payload(st, seq)
             ok = _en.send_telemetry(payload)
             st.espnow_ok = ok
             if ok:
@@ -525,6 +567,7 @@ async def espnow_task(interval_ms=ESPNOW_INTERVAL_MS):
                 st.espnow_tx_fail_count += 1
         else:
             st.espnow_ok = False
+        _en.send_telemetry_broadcast(payload)
         _board._led.set_espnow_connected(_en.paired)
         await asyncio.sleep_ms(interval_ms)
 

@@ -79,11 +79,13 @@ drivers de pantalla y radio (`ST7789_LCD.md`, `SX1262_LoRa.md`).
 <p align="center">
   <img src="docs/Fotos/WhatsApp%20Image%202026-10-17%20at%207.27.15%20PM.jpeg" width="420" alt="Equipo armando la carrocería del auto en el taller">
   <img src="docs/Fotos/WhatsApp%20Image%202026-10-18%20at%201.13.11%20PM.jpeg" width="420" alt="Componentes de electrónica de a bordo sobre la mesa de trabajo">
+  <img src="docs/Fotos/WhatsApp%20Image%202026-10-27%20at%205.37.10%20PM.jpeg" width="420" alt="Boceto a mano del cableado del Super Mini">
+  <img src="docs/Fotos/WhatsApp%20Image%202026-10-28%20at%209.21.30%20AM.jpeg" width="420" alt="Esquemático del Super Mini en KiCad">
 </p>
 
-Instantáneas del taller de La Salle Florida: armado de la carrocería y electrónica de a bordo antes de
-integrarla al auto. Más fotos, videos del proceso y el esquemático de cableado del Super Mini (KiCad)
-en [`docs/Fotos/`](docs/Fotos/) y [`docs/KiCad/`](docs/KiCad/).
+Instantáneas del taller de La Salle Florida: armado de la carrocería y electrónica de a bordo, y el
+camino del cableado desde el primer boceto a mano hasta el esquemático en KiCad. Más fotos, videos del
+proceso y el proyecto KiCad completo en [`docs/Fotos/`](docs/Fotos/) y [`docs/KiCad/`](docs/KiCad/).
 
 ## Nota sobre credenciales
 

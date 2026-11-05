@@ -1,49 +1,14 @@
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-venv/
-env/
-ENV/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
+*.pyc
 .directory
-Thumbs.db
+.mcp.json
 
-# Logs
-*.log
+# KiCad: historial local del editor (repo git anidado del plugin de
+# historial) y archivos de bloqueo -- no se versionan.
+**/.history/
+*.lck
 
-# Temporary files
-*.tmp
-.tmp/
-
-# MicroPython / ESP32 builds
-*.mpy
-.build/
+# Reportes generados por KiCad (Inspect > Electrical/Design Rules Checker) --
+# se regeneran localmente, versionarlos solo ensucia el diff.
+*ERC.rpt
+*DRC.rpt

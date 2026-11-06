@@ -1,0 +1,64 @@
+0 rx=112 lora_tx=39 lora_ok=True seq=153 age_ms=812
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+1 rx=113 lora_tx=39 lora_ok=True seq=154 age_ms=992
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+2 rx=114 lora_tx=39 lora_ok=True seq=155 age_ms=950
+3 rx=114 lora_tx=40 lora_ok=True seq=155 age_ms=1952
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+4 rx=115 lora_tx=40 lora_ok=True seq=157 age_ms=847
+5 rx=115 lora_tx=40 lora_ok=True seq=157 age_ms=1849
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+6 rx=117 lora_tx=41 lora_ok=True seq=159 age_ms=681
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+7 rx=118 lora_tx=41 lora_ok=True seq=160 age_ms=742
+8 rx=118 lora_tx=41 lora_ok=True seq=160 age_ms=1743
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+9 rx=120 lora_tx=42 lora_ok=True seq=162 age_ms=496
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+10 rx=121 lora_tx=42 lora_ok=True seq=163 age_ms=714
+11 rx=121 lora_tx=42 lora_ok=True seq=163 age_ms=1716
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+12 rx=122 lora_tx=43 lora_ok=True seq=165 age_ms=683
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+13 rx=123 lora_tx=43 lora_ok=True seq=166 age_ms=635
+14 rx=123 lora_tx=43 lora_ok=True seq=166 age_ms=1636
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+15 rx=125 lora_tx=44 lora_ok=True seq=168 age_ms=649
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+16 rx=126 lora_tx=44 lora_ok=True seq=169 age_ms=648
+17 rx=126 lora_tx=44 lora_ok=True seq=169 age_ms=1649
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+18 rx=128 lora_tx=45 lora_ok=True seq=171 age_ms=647
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+19 rx=129 lora_tx=45 lora_ok=True seq=172 age_ms=598
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x38 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0xeac
+load:0x403c8700,len:0xc28
+load:0x403cb700,len:0x2ff8
+entry 0x403c88ac
+MicroPython v1.27.0-dirty on 2026-04-10; ESP32S3 module (spiram octal) with ESP32S3[main] arrancando...
+
+[power] reset_cause=1 wake_reason=0
+Type "help()" for more information.
+>>> [HW] VEXT habilitado para QuickLink/GPS
+[GPS] UART1 RX=GPIO1 TX=GPIO2 @ 9600 baud
+[main] display OK 320x170
+[LoRa] OK @ 915.0 MHz BW=125.0 SF9 CR4/6 17 dBm
+[SD] FAT montado: 124735488 sectores (59.48 GiB)
+[config] archivo de ajustes inválido; se usarán defaults: configuración T190 inválida: energy_used_effective_wh fuera de rango
+[espnow] peer recordado: 9C:13:9E:F2:44:18
+[espnow] OK, peer recordado: 9C:13:9E:F2:44:18
+[config] enviando ajustes al Super Mini, ID=1
+[SD] grabando /sd/SINFECHA/RIDE0108.CSV
+[config] Super Mini confirmó ajustes, ID=1
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango

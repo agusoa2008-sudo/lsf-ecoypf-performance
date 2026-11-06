@@ -1,0 +1,26 @@
+0 tx=112 fail=41 paired=True link_ok=True
+1 tx=113 fail=41 paired=True link_ok=True
+2 tx=114 fail=41 paired=True link_ok=True
+3 tx=114 fail=42 paired=True link_ok=False
+4 tx=115 fail=42 paired=True link_ok=True
+5 tx=116 fail=42 paired=True link_ok=True
+6 tx=117 fail=42 paired=True link_ok=True
+7 tx=118 fail=42 paired=True link_ok=True
+8 tx=119 fail=42 paired=True link_ok=True
+9 tx=120 fail=42 paired=True link_ok=True
+10 tx=121 fail=42 paired=True link_ok=True
+11 tx=121 fail=43 paired=True link_ok=False
+12 tx=122 fail=43 paired=True link_ok=True
+13 tx=123 fail=43 paired=True link_ok=True
+14 tx=124 fail=43 paired=True link_ok=True
+15 tx=125 fail=43 paired=True link_ok=True
+16 tx=126 fail=43 paired=True link_ok=True
+17 tx=127 fail=43 paired=True link_ok=True
+18 tx=128 fail=43 paired=True link_ok=True
+19 tx=129 fail=43 paired=True link_ok=True
+20 tx=130 fail=43 paired=True link_ok=True
+21 tx=130 fail=44 paired=True link_ok=False
+22 tx=130 fail=45 paired=True link_ok=False
+23 tx=130 fail=46 paired=True link_ok=False
+[sensor_task] loop estancado 1.2s -- se recorta a 1.0s para la integracion de Wh
+24 tx=130 fail=47 paired=True link_ok=False

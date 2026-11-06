@@ -34,14 +34,16 @@
 # ~1m de distancia el enlace ESP-NOW va a andar con margen de sobra, no es
 # una restriccion de diseño.
 #
-# Patron "REPL libre" (igual que los demas main.py del proyecto): toda la
-# lectura corre en un _thread aparte con asyncio adentro. Al bootear,
-# main.py arranca el hilo y retorna enseguida -- la consola queda
-# disponible para llamar status() / stop() / start() / reload_config() /
-# dump_config() / debug() / debug_ap_toggle() / debug_ap_status() directo
-# (sin `import main`).
+# main.py arranca asyncio.run() DIRECTO en el hilo principal (ver start()
+# mas abajo) -- NO en un _thread de fondo. Eso bloquea la consola mientras
+# la app corre (Ctrl-C para volver al REPL); es la unica forma de usar
+# asyncio que MicroPython soporta de verdad (issue #8340: correr asyncio
+# dentro de un _thread corrompe el estado global de uasyncio y crashea el
+# equipo solo -- ver nota completa en start() y diagnostico espnow/
+# DIAGNOSTICO.md). status() / reload_config() / dump_config() / debug() /
+# debug_ap_toggle() / debug_ap_status() siguen disponibles, pero solo
+# despues de Ctrl-C (o antes de boot()/start()), no mientras corre.
 
-import _thread
 import sys
 import time
 import math
@@ -91,11 +93,10 @@ _BOOT_ID = int.from_bytes(os.urandom(4), "little")
 AUTO_START = True
 _RUNNING = False
 _STOP_REQUESTED = False
-_BG_THREAD_STACK = 10240
 _verbose = False   # debug(True) activa impresion continua de cada lectura
 
-_board = None   # SensorBoard, creado dentro del thread de fondo
-_en = None       # EspNowLink, creado dentro del thread de fondo
+_board = None   # SensorBoard, creado dentro de _main_async()
+_en = None       # EspNowLink, creado dentro de _main_async()
 _debug_ap = None # debug_ap.DebugAP cuando el modo debug/status esta activo, o None
 DEBUG_AP_HOLD_MS = 2000  # BTN0 sostenido este tiempo (con B4 ausente) activa/desactiva
 
@@ -699,11 +700,11 @@ async def debug_ap_button_task(interval_ms=50):
     (~2s) activa/desactiva el modo debug/status (_toggle_debug_ap). Activo
     bajo (pull-up) -- se dispara una sola vez por pulsacion sostenida, no
     se repite mientras se sigue manteniendo. Tambien atiende el pedido de
-    debug_ap_toggle() (REPL) via _DEBUG_AP_TOGGLE_REQUESTED -- ese pedido
-    viene de OTRO thread (ver nota ahi), asi que no puede llamar
-    _toggle_debug_ap() directo; solo puede dejar la bandera prendida y
-    esperar a que este loop (que corre en el thread de fondo, el mismo
-    del resto de la app) la atienda.
+    debug_ap_toggle() via _DEBUG_AP_TOGGLE_REQUESTED -- debug_ap_toggle()
+    solo es alcanzable desde el REPL despues de un Ctrl-C (ver su
+    docstring), asi que en la practica esa bandera no se usa mientras la
+    app esta corriendo; queda por si en el futuro algo la dispara desde
+    un callback de IRQ en caliente.
 
     Salida automatica: si B4 vuelve (el auto arranca) mientras el modo
     esta activo, se apaga solo -- bloquear solo la ENTRADA con B4 presente
@@ -739,18 +740,19 @@ async def debug_ap_button_task(interval_ms=50):
 
 
 def debug_ap_toggle():
-    """Pide activar/desactivar el modo debug/status desde el REPL, sin
-    tener que sostener el boton fisico -- util probando por USB. NO llama
-    asyncio.run(): este codigo corre en el thread del REPL, mientras el
-    thread de fondo ya tiene su propio loop asyncio corriendo (ver
-    start()/_bg()) -- llamar asyncio.run() aca chocaria con ese loop. Solo
-    deja pedido el toggle; debug_ap_button_task() (que si corre en el
-    thread de fondo) lo ejecuta en su proximo ciclo (<=50ms)."""
+    """Pide activar/desactivar el modo debug/status sin tener que sostener
+    el boton fisico. OJO: desde que start() corre asyncio.run() directo en
+    el hilo principal (ya no en un _thread de fondo, ver nota en start()),
+    el REPL queda bloqueado mientras la app corre -- esta funcion solo es
+    alcanzable DESPUES de un Ctrl-C (que ya detuvo la app), no en caliente
+    mientras corre. Para alternar el modo debug en caliente usar el boton
+    fisico (ver debug_ap_button_task), que si sigue corriendo dentro del
+    loop asyncio normal."""
     global _DEBUG_AP_TOGGLE_REQUESTED
     _DEBUG_AP_TOGGLE_REQUESTED = True
 
 
-# ── Arranque asyncio (corre dentro del thread de fondo) ─────────────────────
+# ── Arranque asyncio (corre en el hilo principal, ver start()) ──────────────
 
 async def _main_async():
     global _board, _en, _debug_ap
@@ -788,8 +790,10 @@ def _bg():
     global _RUNNING, _STOP_REQUESTED
     try:
         asyncio.run(_main_async())
+    except KeyboardInterrupt:
+        pass
     except Exception as exc:
-        print("[main] error fatal en hilo de fondo:", exc)
+        print("[main] error fatal:", exc)
         try:
             sys.print_exception(exc)
         except Exception:
@@ -800,32 +804,44 @@ def _bg():
 
 
 def start():
-    """Arranca la lectura de sensores en un thread de fondo. No bloquea -> REPL libre."""
+    """Arranca la lectura de sensores. BLOQUEA el REPL -- Ctrl-C interrumpe
+    y vuelve a la consola (como cualquier main.py de MicroPython sin hilos).
+
+    ANTES esto arrancaba un _thread de fondo para dejar la consola libre
+    mientras la app corria ("REPL libre"). Se sacó: uasyncio guarda TODO su
+    estado global en core.py sin proteccion para hilos (confirmado por el
+    mantenedor de MicroPython, issue #8340 -- "Using asyncio in _thread"),
+    y correr asyncio.run() dentro de un _thread termina corrompiendo ese
+    estado mas temprano o mas tarde. En banco eso se vio como crashes
+    reproducibles ('ValueError: generator already executing' -> Guru
+    Meditation Error -> reboot), afectando por igual a esta placa y al
+    T190 -- ver diagnostico espnow/DIAGNOSTICO.md. Cada crash cortaba
+    ESP-NOW varios segundos hasta que la placa volvia a bootear y
+    reemparejar sola. Correr asyncio.run() en el hilo principal (sin
+    _thread) es la unica forma de usar asyncio que MicroPython soporta de
+    verdad, y elimina el bug de raiz -- a costa de la consola libre
+    mientras la app esta corriendo."""
     global _RUNNING, _STOP_REQUESTED
     if _RUNNING:
         print("[main] ya esta corriendo")
         return False
     _STOP_REQUESTED = False
     _RUNNING = True
-    try:
-        _thread.stack_size(_BG_THREAD_STACK)
-    except Exception as exc:
-        print("[main] stack size error:", exc)
-    _thread.start_new_thread(_bg, ())
+    _bg()
     return True
 
 
 def stop(wait_ms=0):
-    """Pide detener la lectura. Con wait_ms>0 espera (bloqueante) a que termine."""
+    """Pide detener la lectura -- solo tiene efecto si algo mas (ej. un
+    callback de IRQ) la llama mientras start() sigue bloqueando el REPL;
+    desde la consola interactiva, usar Ctrl-C en su lugar. wait_ms queda
+    por compatibilidad pero no bloquea nada nuevo (ya no hay un hilo
+    aparte esperando)."""
     global _STOP_REQUESTED
     if not _RUNNING:
         print("[main] no esta corriendo")
         return False
     _STOP_REQUESTED = True
-    remaining = int(wait_ms)
-    while _RUNNING and remaining > 0:
-        time.sleep_ms(10)
-        remaining -= 10
     return True
 
 

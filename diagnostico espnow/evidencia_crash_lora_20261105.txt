@@ -1,0 +1,141 @@
+EXC 'NoneType' object has no attribute 'state'
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[main] arrancando...
+[power] reset_cause=2 wake_reason=0
+[HW] VEXT habilitado para QuickLink/GPS
+[GPS] UART1 RX=GPIO1 TX=GPIO2 @ 9600 baud
+EXC 'NoneType' object has no attribute 'state'
+[main] display OK 320x170
+[LoRa] OK @ 915.0 MHz BW=125.0 SF9 CR4/6 17 dBm
+[SD] inicializacion fallida: [Errno 1] EPERM
+[config] archivo de ajustes inválido; se usarán defaults: configuración T190 inválida: energy_used_effective_wh fuera de rango
+[espnow] error al re-agregar peer guardado: (-12395, 'ESP_ERR_ESPNOW_EXIST')
+[espnow] OK, esperando Super Mini...
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+2.0s rx=0 lora_tx=0 lora_ok=False seq=None
+[espnow] pairing OK con 9C:13:9E:F2:44:18
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[LoRa] send error: SX1262 send status -5
+Task exception wasn't retrieved
+future: <Task> coro= <generator object 'lora_task' at 3c1b49c0>
+Traceback (most recent call last):
+  File "asyncio/core.py", line 1, in run_until_complete
+  File "telemetry.py", line 198, in lora_task
+  File "asyncio/core.py", line 1, in run_until_complete
+ValueError: generator already executing
+
+A fatal error occurred. The crash dump printed below may be used to help
+determine what caused it. If you are not already running the most recent
+version of MicroPython, consider upgrading. New versions often fix bugs.
+
+To learn more about how to debug and/or report this crash visit the wiki
+page at: https://github.com/micropython/micropython/wiki/ESP32-debugging
+
+MPY version : v1.27.0-dirty on 2026-04-10
+IDF version : v5.5.1
+Machine     : ESP32S3 module (spiram octal) with ESP32S3
+
+Guru Meditation Error: Core  1 panic'ed (LoadProhibited). Exception was unhandled.
+
+Core  1 register dump:
+PC      : 0x4206375a  PS      : 0x00060330  A0      : 0x8206382f  A1      : 0x3fcc9e10  
+A2      : 0x4203ea70  A3      : 0x00000000  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x00000000  A7      : 0x3c209090  A8      : 0x82063788  A9      : 0x3fcc9df0  
+A10     : 0x3c209090  A11     : 0x3c209090  A12     : 0x3c209090  A13     : 0x3c216318  
+A14     : 0x00000180  A15     : 0x3fcca3f8  SAR     : 0x00000000  EXCCAUSE: 0x0000001c  
+EXCVADDR: 0x0000000c  LBEG    : 0x42053c9a  LEND    : 0x42053ca3  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x42063757:0x3fcc9e10 0x4206382c:0x3fcc9e30 0x4203ebe1:0x3fcc9e50 0x42030429:0x3fcc9e70 0x42037eb1:0x3fcc9e90 0x42037f7b:0x3fcc9eb0 0x40379786:0x3fcc9ed0 0x4203054f:0x3fcc9f70 0x42037eb1:0x3fcc9fa0 0x403796e5:0x3fcc9fc0 0x4203054f:0x3fcca060 0x42037eb1:0x3fcca0c0 0x42037f7b:0x3fcca0e0 0x40379786:0x3fcca100 0x4203054f:0x3fcca1a0 0x42037eb1:0x3fcca1d0 0x420600ec:0x3fcca1f0 0x4202a461:0x3fcca290
+
+
+
+
+ELF file SHA256: f200b057a
+
+Rebooting...
+���ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x38 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403829be
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0xeac
+load:0x403c8700,len:0xc28
+load:0x403cb700,len:0x2ff8
+entry 0x403c88ac
+MicroPython v1.27.0-dirty on 2026-04-10; ESP32S3 module (spiram octal) with ESP32S3[main] arrancando...
+
+[power] reset_cause=2 wake_reason=0
+Type "help()" for more information.
+>>> [HW] VEXT habilitado para QuickLink/GPS
+[GPS] UART1 RX=GPIO1 TX=GPIO2 @ 9600 baud
+[main] display OK 320x170
+[LoRa] OK @ 915.0 MHz BW=125.0 SF9 CR4/6 17 dBm
+[SD] FAT montado: 124735488 sectores (59.48 GiB)
+[config] archivo de ajustes inválido; se usarán defaults: configuración T190 inválida: energy_used_effective_wh fuera de rango
+[espnow] peer recordado: 9C:13:9E:F2:44:18
+[espnow] OK, peer recordado: 9C:13:9E:F2:44:18
+[config] enviando ajustes al Super Mini, ID=1
+[SD] grabando /sd/SINFECHA/RIDE0110.CSV
+[config] Super Mini confirmó ajustes, ID=1
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango
+[energy] no se pudo guardar el estado del pack: energía recibida fuera de rango

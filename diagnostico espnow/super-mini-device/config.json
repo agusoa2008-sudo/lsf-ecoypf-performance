@@ -1,0 +1,1 @@
+{"battery": {"tap_divider_ratio": [5.3, 9.7, 15.3, 19.7], "ads_mode": "cumulative", "current_sens_v_per_a": 0.007813, "voltage_factor_milli": [1000, 1000, 1000, 1000]}, "sleep": {"b4_loss_timeout_s": 600.0}, "remote_config_id": 1, "speed": {"max_speed_kmh": 80.0, "debounce_us": 2000, "meters_per_pulse": 1.6}}
